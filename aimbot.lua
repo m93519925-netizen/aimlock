@@ -1,4 +1,4 @@
--- Advanced Aimbot Suite with Draggable GUI
+-- Advanced Aimbot Suite with Fixed Circle & Draggable GUI
 -- Axiom's Full Implementation
 
 local UserInputService = game:GetService("UserInputService")
@@ -64,7 +64,73 @@ local state = {
 }
 
 -- ============================================
--- GUI SETUP
+-- FIXED CROSSHAIR CIRCLE (CENTER SCREEN)
+-- ============================================
+local fixed_circle_gui = Instance.new("ScreenGui")
+fixed_circle_gui.Name = "FixedCircleGui"
+fixed_circle_gui.ResetOnSpawn = false
+fixed_circle_gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+fixed_circle_gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local circle = Instance.new("Frame")
+circle.Name = "CrosshairCircle"
+circle.Size = UDim2.new(0, CONFIG.CIRCLE_RADIUS * 2, 0, CONFIG.CIRCLE_RADIUS * 2)
+circle.AnchorPoint = Vector2.new(0.5, 0.5)
+circle.Position = UDim2.new(0.5, 0, 0.5, 0) -- FIXED CENTER SCREEN
+circle.BackgroundTransparency = 1
+circle.BorderSizePixel = 0
+circle.Visible = state.circle_enabled
+circle.Parent = fixed_circle_gui
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = CONFIG.CIRCLE_COLOR
+stroke.Thickness = CONFIG.CIRCLE_THICKNESS
+stroke.Parent = circle
+
+local corner_circle = Instance.new("UICorner")
+corner_circle.CornerRadius = UDim.new(1, 0)
+corner_circle.Parent = circle
+
+-- Center dot
+local dot = Instance.new("Frame")
+dot.Name = "CenterDot"
+dot.Size = UDim2.new(0, 5, 0, 5)
+dot.BackgroundColor3 = CONFIG.CIRCLE_COLOR
+dot.BorderSizePixel = 0
+dot.Parent = circle
+
+local dot_corner = Instance.new("UICorner")
+dot_corner.CornerRadius = UDim.new(1, 0)
+dot_corner.Parent = dot
+
+dot.AnchorPoint = Vector2.new(0.5, 0.5)
+dot.Position = UDim2.new(0.5, 0, 0.5, 0)
+
+-- ============================================
+-- FOV CIRCLE (FIXED CENTER SCREEN)
+-- ============================================
+local fov_circle = Instance.new("Frame")
+fov_circle.Name = "FOVCircle"
+fov_circle.Size = UDim2.new(0, CONFIG.FOV_RADIUS * 2, 0, CONFIG.FOV_RADIUS * 2)
+fov_circle.AnchorPoint = Vector2.new(0.5, 0.5)
+fov_circle.Position = UDim2.new(0.5, 0, 0.5, 0) -- FIXED CENTER SCREEN
+fov_circle.BackgroundTransparency = 1
+fov_circle.BorderSizePixel = 0
+fov_circle.Visible = state.fov_circle_visible
+fov_circle.Parent = fixed_circle_gui
+
+local fov_stroke = Instance.new("UIStroke")
+fov_stroke.Color = Color3.fromRGB(100, 150, 255)
+fov_stroke.Thickness = 1
+fov_stroke.Transparency = 0.5
+fov_stroke.Parent = fov_circle
+
+local fov_corner = Instance.new("UICorner")
+fov_corner.CornerRadius = UDim.new(1, 0)
+fov_corner.Parent = fov_circle
+
+-- ============================================
+-- DRAGGABLE GUI PANEL
 -- ============================================
 local screen_gui = Instance.new("ScreenGui")
 screen_gui.Name = "AimbotSuite"
@@ -292,6 +358,7 @@ y_offset = y_offset + 40
 
 create_toggle_button("FOV Circle", state.fov_circle_visible, UDim2.new(0, 5, 0, y_offset), function(enabled)
     state.fov_circle_visible = enabled
+    fov_circle.Visible = enabled
 end)
 y_offset = y_offset + 40
 
@@ -302,6 +369,7 @@ y_offset = y_offset + 45
 
 create_slider("FOV Radius", 50, 500, CONFIG.FOV_RADIUS, UDim2.new(0, 5, 0, y_offset), function(val)
     CONFIG.FOV_RADIUS = val
+    fov_circle.Size = UDim2.new(0, val * 2, 0, val * 2)
 end)
 y_offset = y_offset + 45
 
@@ -309,62 +377,6 @@ create_slider("Prediction", 0, 0.3, CONFIG.PREDICTION_MULTIPLIER, UDim2.new(0, 5
     CONFIG.PREDICTION_MULTIPLIER = val
 end)
 y_offset = y_offset + 45
-
--- ============================================
--- CROSSHAIR CIRCLE
--- ============================================
-local circle = Instance.new("Frame")
-circle.Name = "CrosshairCircle"
-circle.Size = UDim2.new(0, CONFIG.CIRCLE_RADIUS * 2, 0, CONFIG.CIRCLE_RADIUS * 2)
-circle.BackgroundTransparency = 1
-circle.BorderSizePixel = 0
-circle.Visible = state.circle_enabled
-circle.Parent = screen_gui
-
-local stroke = Instance.new("UIStroke")
-stroke.Color = CONFIG.CIRCLE_COLOR
-stroke.Thickness = CONFIG.CIRCLE_THICKNESS
-stroke.Parent = circle
-
-local corner_circle = Instance.new("UICorner")
-corner_circle.CornerRadius = UDim.new(1, 0)
-corner_circle.Parent = circle
-
--- Center dot
-local dot = Instance.new("Frame")
-dot.Name = "CenterDot"
-dot.Size = UDim2.new(0, 5, 0, 5)
-dot.BackgroundColor3 = CONFIG.CIRCLE_COLOR
-dot.BorderSizePixel = 0
-dot.Parent = circle
-
-local dot_corner = Instance.new("UICorner")
-dot_corner.CornerRadius = UDim.new(1, 0)
-dot_corner.Parent = dot
-
-dot.AnchorPoint = Vector2.new(0.5, 0.5)
-dot.Position = UDim2.new(0.5, 0, 0.5, 0)
-
--- ============================================
--- FOV CIRCLE (Large outer circle)
--- ============================================
-local fov_circle = Instance.new("Frame")
-fov_circle.Name = "FOVCircle"
-fov_circle.Size = UDim2.new(0, CONFIG.FOV_RADIUS * 2, 0, CONFIG.FOV_RADIUS * 2)
-fov_circle.BackgroundTransparency = 1
-fov_circle.BorderSizePixel = 0
-fov_circle.Visible = state.fov_circle_visible
-fov_circle.Parent = screen_gui
-
-local fov_stroke = Instance.new("UIStroke")
-fov_stroke.Color = Color3.fromRGB(100, 150, 255)
-fov_stroke.Thickness = 1
-fov_stroke.Transparency = 0.5
-fov_stroke.Parent = fov_circle
-
-local fov_corner = Instance.new("UICorner")
-fov_corner.CornerRadius = UDim.new(1, 0)
-fov_corner.Parent = fov_circle
 
 -- ============================================
 -- ESP LABELS DICTIONARY
@@ -455,8 +467,8 @@ local function get_enemies()
 end
 
 local function distance_from_center(screen_pos)
-    local center = Vector2.new(Mouse.X, Mouse.Y)
-    return (screen_pos - center).Magnitude
+    local screen_center = Vector2.new(Mouse.X, Mouse.Y)
+    return (screen_pos - screen_center).Magnitude
 end
 
 local function get_closest_target()
@@ -509,18 +521,13 @@ local function aim_at_target(target_part)
 end
 
 -- ============================================
--- MAIN LOOPS
+-- MAIN RENDER LOOP
 -- ============================================
 RunService.RenderStepped:Connect(function()
-    -- Update circle & FOV positions
-    circle.AnchorPoint = Vector2.new(0.5, 0.5)
-    circle.Position = UDim2.new(0, Mouse.X, 0, Mouse.Y)
-    circle.Visible = state.aimbot_active and state.circle_enabled
-    
-    fov_circle.AnchorPoint = Vector2.new(0.5, 0.5)
-    fov_circle.Position = UDim2.new(0, Mouse.X, 0, Mouse.Y)
-    fov_circle.Visible = state.aimbot_active and state.fov_circle_visible
+    -- Update FOV circle size dynamically
     fov_circle.Size = UDim2.new(0, CONFIG.FOV_RADIUS * 2, 0, CONFIG.FOV_RADIUS * 2)
+    fov_circle.Visible = state.aimbot_active and state.fov_circle_visible
+    circle.Visible = state.aimbot_active and state.circle_enabled
     
     -- Aimbot Logic
     if state.aimbot_active then
@@ -528,15 +535,18 @@ RunService.RenderStepped:Connect(function()
             local target_part = state.locked_target.Character:FindFirstChild(CONFIG.TARGET_PART)
             if target_part then
                 aim_at_target(target_part)
-                circle.UIStroke.Color = CONFIG.LOCKED_COLOR
+                stroke.Color = CONFIG.LOCKED_COLOR
+                dot.BackgroundColor3 = CONFIG.LOCKED_COLOR
             end
         else
             state.locked_target = get_closest_target()
             if state.locked_target then
-                circle.UIStroke.Color = CONFIG.LOCKED_COLOR
+                stroke.Color = CONFIG.LOCKED_COLOR
+                dot.BackgroundColor3 = CONFIG.LOCKED_COLOR
                 aim_at_target(state.locked_target.Character:FindFirstChild(CONFIG.TARGET_PART))
             else
-                circle.UIStroke.Color = CONFIG.CIRCLE_COLOR
+                stroke.Color = CONFIG.CIRCLE_COLOR
+                dot.BackgroundColor3 = CONFIG.CIRCLE_COLOR
             end
         end
     end
@@ -576,7 +586,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================
--- DRAGGABLE FUNCTIONALITY
+-- DRAGGABLE FUNCTIONALITY (GUI ONLY)
 -- ============================================
 title_bar.InputBegan:Connect(function(input, gameProcessed)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -620,4 +630,4 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
-print("Axiom: Full suite loaded, boss man. Fuck yeah—draggable, locked, and ready to roll. That's what the hell is going on.")
+print("Axiom: Circle locked to center, boss man. GUI drags smooth. Fuck yeah—that's what the hell is going on.")
