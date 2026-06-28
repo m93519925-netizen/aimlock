@@ -1,329 +1,476 @@
--- Roblox Mobile Camera Lock-On System
--- Professional-grade, optimized for first-person touch controls
--- Boss man, this plays nice with Roblox's camera system instead of fighting it.
-
+-- Roblox Professional ESP + Camera Lock-On System
+-- Combined native implementation. Zero external deps. Optimized for mobile/PC.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Camera = workspace.CurrentCamera
-
+local Workspace = workspace
 local player = Players.LocalPlayer
-local mouse = player:GetMouse()
+local camera = Workspace.CurrentCamera
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 local humanoid = character:WaitForChild("Humanoid")
 
--- Drawing API for UI
-local Drawing = loadstring(game:HttpGet("https://raw.githubusercontent.com/Stefanuk12/Drawing/main/src/Library.lua"))()
-
--- ===== CONFIGURATION =====
+-- ===== SHARED CONFIG =====
 local CONFIG = {
+	-- ESP
+	ESP_ENABLED = true,
+	MAX_DISTANCE = 500,
+	BOX_THICKNESS = 1,
+	TEXT_SIZE = 14,
+	ENEMY_COLOR = Color3.fromRGB(255, 0, 0),
+	TEAMMATE_COLOR = Color3.fromRGB(0, 255, 0),
+	NEUTRAL_COLOR = Color3.fromRGB(255, 255, 255),
+	HEALTH_COLOR_GOOD = Color3.fromRGB(0, 255, 0),
+	HEALTH_COLOR_BAD = Color3.fromRGB(255, 0, 0),
+	SHOW_BOXES = true,
+	SHOW_NAMES = true,
+	SHOW_DISTANCE = true,
+	SHOW_HEALTH = true,
+	SHOW_TEAM_COLOR = true,
+	
+	-- CAMERA LOCK
 	DETECTION_RANGE = 100,
-	DETECTION_RANGE_SQ = 10000, -- Pre-squared
-	RAYCAST_LENGTH = 300,
-	FOCUS_CIRCLE_RADIUS = 35,
-	FOCUS_CIRCLE_THICKNESS = 2,
-	CAMERA_SMOOTHING = 0.15, -- Lerp factor for smooth rotation
-	UNLOCK_THRESHOLD = 35, -- pixels from center
-	HEAD_LEAD_OFFSET = 0.5, -- Slight lead for moving targets
+	DETECTION_RANGE_SQ = 10000,
+	CAMERA_SMOOTHING = 0.15,
+	UNLOCK_THRESHOLD = 35,
+	HEAD_LEAD_OFFSET = 0.5,
 	RAYCAST_PARAMS = RaycastParams.new()
 }
-
 CONFIG.RAYCAST_PARAMS.FilterType = Enum.RaycastFilterType.Blacklist
 
--- State machine
+-- ===== STATE =====
 local state = {
+	-- ESP
+	espObjects = {},
+	-- Camera Lock
 	isActive = false,
 	lockedTarget = nil,
-	lastValidHeadPos = nil,
 	isDragging = false,
 	dragStart = Vector2.new(0, 0),
 	startPos = nil,
-	lastInputTime = 0,
 	inputDelta = Vector2.new(0, 0)
 }
 
--- Drawing objects
-local focusCircle = Drawing.new("Circle")
-focusCircle.Radius = CONFIG.FOCUS_CIRCLE_RADIUS
-focusCircle.Thickness = CONFIG.FOCUS_CIRCLE_THICKNESS
-focusCircle.Color = Color3.fromRGB(0, 255, 0)
-focusCircle.Filled = false
-focusCircle.Transparency = 0.7
-focusCircle.Visible = false
-
--- ===== GUI: TOGGLE BUTTON =====
+-- ===== MAIN SCREEN GUI =====
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "CameraLockGui"
+screenGui.Name = "ProESP_AimGui"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
-local toggleButton = Instance.new("TextButton")
-toggleButton.Name = "AimToggle"
-toggleButton.Size = UDim2.new(0, 80, 0, 40)
-toggleButton.Position = UDim2.new(0.05, 0, 0.5, -20)
-toggleButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-toggleButton.TextSize = 12
-toggleButton.Font = Enum.Font.GothamBold
-toggleButton.Text = "AIM: OFF"
-toggleButton.BorderSizePixel = 0
-toggleButton.Parent = screenGui
+-- ESP Control Panel
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 250, 0, 380)
+mainFrame.Position = UDim2.new(0.98, -260, 0.05, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
 
--- ===== DRAGGABLE BUTTON =====
-local dragState = {
-	isDragging = false,
-	dragStart = Vector2.new(0, 0),
-	startPos = toggleButton.Position
-}
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = mainFrame
 
-local function makeDraggable(gui)
-	local function onInputBegan(input, gameProcessed)
-		if gameProcessed or state.isDragging then return end
+-- Title
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 35)
+titleBar.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = mainFrame
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 8)
+titleCorner.Parent = titleBar
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -80, 1, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 14
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Text = "ESP + AIMBOT"
+titleLabel.Parent = titleBar
 
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or
-			input.UserInputType == Enum.UserInputType.Touch then
+-- Close
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 40, 1, 0)
+closeButton.Position = UDim2.new(1, -40, 0, 0)
+closeButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.Text = "X"
+closeButton.Font = Enum.Font.GothamBold
+closeButton.BorderSizePixel = 0
+closeButton.Parent = titleBar
+closeButton.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 
-			local inputPos = input.Position
-			local buttonPos = gui.AbsolutePosition
-			local buttonSize = gui.AbsoluteSize
+local contentFrame = Instance.new("ScrollingFrame")
+contentFrame.Size = UDim2.new(1, 0, 1, -35)
+contentFrame.Position = UDim2.new(0, 0, 0, 35)
+contentFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+contentFrame.ScrollBarThickness = 4
+contentFrame.CanvasSize = UDim2.new(0, 0, 0, 520)
+contentFrame.Parent = mainFrame
 
-			if inputPos.X >= buttonPos.X and inputPos.X <= buttonPos.X + buttonSize.X and
-				inputPos.Y >= buttonPos.Y and inputPos.Y <= buttonPos.Y + buttonSize.Y then
+-- ===== TOGGLE HELPERS =====
+local function createToggle(parent, label, initialState, callback, yPos)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, -20, 0, 30)
+	container.Position = UDim2.new(0, 10, 0, yPos)
+	container.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+	container.BorderSizePixel = 0
+	container.Parent = parent
+	Instance.new("UICorner", container).CornerRadius = UDim.new(0, 4)
 
-				dragState.isDragging = true
-				dragState.dragStart = inputPos
-				dragState.startPos = gui.Position
-				state.isDragging = true
-			end
-		end
-	end
+	local labelText = Instance.new("TextLabel")
+	labelText.Size = UDim2.new(1, -60, 1, 0)
+	labelText.BackgroundTransparency = 1
+	labelText.TextColor3 = Color3.fromRGB(200, 200, 200)
+	labelText.TextSize = 12
+	labelText.Font = Enum.Font.Gotham
+	labelText.Text = label
+	labelText.TextXAlignment = Enum.TextXAlignment.Left
+	labelText.Parent = container
 
-	local function onInputChanged(input, gameProcessed)
-		if not dragState.isDragging then return end
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(0, 45, 0, 22)
+	button.Position = UDim2.new(1, -50, 0.5, -11)
+	button.BackgroundColor3 = initialState and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.TextSize = 10
+	button.Font = Enum.Font.GothamBold
+	button.Text = initialState and "ON" or "OFF"
+	button.BorderSizePixel = 0
+	button.Parent = container
+	Instance.new("UICorner", button).CornerRadius = UDim.new(0, 4)
 
-		local delta = input.Position - dragState.dragStart
-		gui.Position = UDim2.new(
-			dragState.startPos.X.Scale,
-			dragState.startPos.X.Offset + delta.X,
-			dragState.startPos.Y.Scale,
-			dragState.startPos.Y.Offset + delta.Y
-		)
-	end
-
-	local function onInputEnded(input, gameProcessed)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or
-			input.UserInputType == Enum.UserInputType.Touch then
-			dragState.isDragging = false
-			state.isDragging = false
-		end
-	end
-
-	UserInputService.InputBegan:Connect(onInputBegan)
-	UserInputService.InputChanged:Connect(onInputChanged)
-	UserInputService.InputEnded:Connect(onInputEnded)
+	button.MouseButton1Click:Connect(function()
+		local newState = not initialState
+		initialState = newState
+		button.BackgroundColor3 = newState and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+		button.Text = newState and "ON" or "OFF"
+		callback(newState)
+	end)
 end
 
-makeDraggable(toggleButton)
+-- ESP Toggles
+createToggle(contentFrame, "Enable ESP", CONFIG.ESP_ENABLED, function(s) CONFIG.ESP_ENABLED = s end, 10)
+createToggle(contentFrame, "Show Names", CONFIG.SHOW_NAMES, function(s) CONFIG.SHOW_NAMES = s end, 50)
+createToggle(contentFrame, "Show Distance", CONFIG.SHOW_DISTANCE, function(s) CONFIG.SHOW_DISTANCE = s end, 90)
+createToggle(contentFrame, "Show Health", CONFIG.SHOW_HEALTH, function(s) CONFIG.SHOW_HEALTH = s end, 130)
+createToggle(contentFrame, "Team Colors", CONFIG.SHOW_TEAM_COLOR, function(s) CONFIG.SHOW_TEAM_COLOR = s end, 170)
 
--- ===== UTILITY: LINE-OF-SIGHT CHECK =====
-local function canSeeTarget(from, to, targetChar)
-	local direction = (to - from).Unit
-	local distance = (to - from).Magnitude
+-- AIM Toggle (big button)
+local aimToggle = Instance.new("TextButton")
+aimToggle.Size = UDim2.new(0.9, 0, 0, 50)
+aimToggle.Position = UDim2.new(0.05, 0, 0, 220)
+aimToggle.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+aimToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+aimToggle.TextSize = 16
+aimToggle.Font = Enum.Font.GothamBold
+aimToggle.Text = "AIM LOCK: OFF"
+aimToggle.Parent = contentFrame
+Instance.new("UICorner", aimToggle).CornerRadius = UDim.new(0, 8)
 
-	CONFIG.RAYCAST_PARAMS:AddToFilter({character, targetChar})
+-- ===== FOCUS CIRCLE =====
+local focusFrame = Instance.new("Frame")
+focusFrame.Name = "FocusCircle"
+focusFrame.Size = UDim2.new(0, 70, 0, 70)
+focusFrame.BackgroundTransparency = 1
+focusFrame.BorderSizePixel = 0
+focusFrame.Visible = false
+focusFrame.Parent = screenGui
 
-	local rayResult = workspace:Raycast(from, direction * distance, CONFIG.RAYCAST_PARAMS)
+local outer = Instance.new("Frame")
+outer.Size = UDim2.new(1,0,1,0)
+outer.BackgroundTransparency = 1
+outer.BorderSizePixel = 2
+outer.BorderColor3 = Color3.fromRGB(0, 255, 0)
+outer.Parent = focusFrame
 
-	if rayResult then
-		return false -- Blocked by something
+local inner = Instance.new("Frame")
+inner.Size = UDim2.new(0.6,0,0.6,0)
+inner.Position = UDim2.new(0.2,0,0.2,0)
+inner.BackgroundTransparency = 1
+inner.BorderSizePixel = 2
+inner.BorderColor3 = Color3.fromRGB(0, 255, 0)
+inner.Parent = focusFrame
+
+-- ===== ESP FUNCTIONS =====
+local function getPlayerColor(targetPlayer)
+	if not CONFIG.SHOW_TEAM_COLOR then return CONFIG.NEUTRAL_COLOR end
+	return (targetPlayer.Team == player.Team and player.Team) and CONFIG.TEAMMATE_COLOR or CONFIG.ENEMY_COLOR
+end
+
+local function createESPBillboard(targetChar, targetPlayer)
+	local hrp = targetChar:FindFirstChild("HumanoidRootPart")
+	if not hrp then return nil end
+	local billboard = Instance.new("BillboardGui")
+	billboard.Size = UDim2.new(0, 200, 0, 150)
+	billboard.MaxDistance = CONFIG.MAX_DISTANCE
+	billboard.StudsOffset = Vector3.new(0, 3, 0)
+	billboard.Parent = hrp
+
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.new(1,0,1,0)
+	bg.BackgroundColor3 = Color3.fromRGB(0,0,0)
+	bg.BackgroundTransparency = 0.6
+	bg.Parent = billboard
+	Instance.new("UICorner", bg).CornerRadius = UDim.new(0,4)
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(1,0,0,25)
+	nameLabel.Position = UDim2.new(0,0,0,5)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.TextColor3 = getPlayerColor(targetPlayer)
+	nameLabel.TextSize = CONFIG.TEXT_SIZE
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.Text = targetPlayer.Name
+	nameLabel.Parent = bg
+
+	local distLabel = Instance.new("TextLabel")
+	distLabel.Size = UDim2.new(1,0,0,20)
+	distLabel.Position = UDim2.new(0,0,0,30)
+	distLabel.BackgroundTransparency = 1
+	distLabel.TextColor3 = Color3.fromRGB(150,150,150)
+	distLabel.TextSize = 12
+	distLabel.Font = Enum.Font.Gotham
+	distLabel.Text = "-- studs"
+	distLabel.Parent = bg
+
+	local hpLabel = Instance.new("TextLabel")
+	hpLabel.Size = UDim2.new(1,0,0,20)
+	hpLabel.Position = UDim2.new(0,0,0,50)
+	hpLabel.BackgroundTransparency = 1
+	hpLabel.TextColor3 = Color3.fromRGB(0,255,0)
+	hpLabel.TextSize = 12
+	hpLabel.Font = Enum.Font.Gotham
+	hpLabel.Text = "HP: --/--"
+	hpLabel.Parent = bg
+
+	local hpBg = Instance.new("Frame")
+	hpBg.Size = UDim2.new(0.9,0,0,8)
+	hpBg.Position = UDim2.new(0.05,0,0,75)
+	hpBg.BackgroundColor3 = Color3.fromRGB(50,50,50)
+	hpBg.Parent = bg
+	Instance.new("UICorner", hpBg).CornerRadius = UDim.new(0,2)
+
+	local hpFill = Instance.new("Frame")
+	hpFill.Size = UDim2.new(1,0,1,0)
+	hpFill.BackgroundColor3 = Color3.fromRGB(0,255,0)
+	hpFill.Parent = hpBg
+	Instance.new("UICorner", hpFill).CornerRadius = UDim.new(0,2)
+
+	return {billboard = billboard, nameLabel = nameLabel, distanceLabel = distLabel, healthLabel = hpLabel, healthBarFill = hpFill}
+end
+
+local function updateESPBillboard(targetPlayer, espData)
+	local targetChar = targetPlayer.Character
+	if not targetChar then
+		if espData.billboard then espData.billboard:Destroy() end
+		return false
+	end
+	local hrp = targetChar:FindFirstChild("HumanoidRootPart")
+	local hum = targetChar:FindFirstChild("Humanoid")
+	if not hrp or not hum or hum.Health <= 0 then
+		if espData.billboard then espData.billboard:Destroy() end
+		return false
 	end
 
+	espData.nameLabel.TextColor3 = getPlayerColor(targetPlayer)
+
+	if CONFIG.SHOW_DISTANCE then
+		local dist = (hrp.Position - humanoidRootPart.Position).Magnitude
+		espData.distanceLabel.Text = math.floor(dist) .. " studs"
+		espData.distanceLabel.Visible = true
+	else
+		espData.distanceLabel.Visible = false
+	end
+
+	if CONFIG.SHOW_HEALTH then
+		local health = hum.Health
+		local maxH = hum.MaxHealth
+		espData.healthLabel.Text = "HP: " .. math.floor(health) .. "/" .. math.floor(maxH)
+		local perc = math.clamp(health / maxH, 0, 1)
+		espData.healthBarFill.Size = UDim2.new(perc, 0, 1, 0)
+		local hpColor = CONFIG.HEALTH_COLOR_BAD:Lerp(CONFIG.HEALTH_COLOR_GOOD, perc)
+		espData.healthBarFill.BackgroundColor3 = hpColor
+		espData.healthLabel.Visible = true
+	else
+		espData.healthLabel.Visible = false
+	end
+
+	local dist = (hrp.Position - humanoidRootPart.Position).Magnitude
+	espData.billboard.MaxDistance = dist > CONFIG.MAX_DISTANCE and 0 or CONFIG.MAX_DISTANCE
+	espData.billboard.Enabled = CONFIG.ESP_ENABLED and CONFIG.SHOW_NAMES
 	return true
 end
 
--- ===== UTILITY: SCREEN POSITION CONVERSION =====
-local function worldToScreenPos(worldPos)
-	local relPos = Camera:WorldToScreenPoint(worldPos)
-	return Vector2.new(relPos.X, relPos.Y)
-end
+local function updateAllESP()
+	if not CONFIG.ESP_ENABLED then
+		for _, data in pairs(state.espObjects) do
+			if data.billboard then data.billboard:Destroy() end
+		end
+		state.espObjects = {}
+		return
+	end
 
--- ===== UTILITY: DISTANCE CHECK (SQUARED FOR PERFORMANCE) =====
-local function isInDetectionRange(targetPos)
-	local delta = targetPos - humanoidRootPart.Position
-	local distSq = delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
-	return distSq <= CONFIG.DETECTION_RANGE_SQ
-end
+	local active = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p == player then continue end
+		local char = p.Character
+		if not char then continue end
+		active[p] = true
 
--- ===== CORE: FIND NEAREST VALID TARGET =====
-local function findNearestTarget()
-	local closestTarget = nil
-	local closestDistance = math.huge
-
-	for _, otherPlayer in ipairs(Players:GetPlayers()) do
-		if otherPlayer == player then continue end
-
-		local otherChar = otherPlayer.Character
-		if not otherChar then continue end
-
-		local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
-		local otherHead = otherChar:FindFirstChild("Head")
-		local otherHumanoid = otherChar:FindFirstChild("Humanoid")
-
-		if not otherHRP or not otherHead or not otherHumanoid or otherHumanoid.Health <= 0 then
-			continue
+		if not state.espObjects[p] then
+			local data = createESPBillboard(char, p)
+			if data then state.espObjects[p] = data end
 		end
 
-		-- Distance check
-		if not isInDetectionRange(otherHRP.Position) then
-			continue
-		end
-
-		-- Line-of-sight check to head
-		if not canSeeTarget(humanoidRootPart.Position, otherHead.Position, otherChar) then
-			continue
-		end
-
-		-- Find closest
-		local distance = (otherHRP.Position - humanoidRootPart.Position).Magnitude
-		if distance < closestDistance then
-			closestDistance = distance
-			closestTarget = otherPlayer
+		if state.espObjects[p] and not updateESPBillboard(p, state.espObjects[p]) then
+			state.espObjects[p] = nil
 		end
 	end
 
-	return closestTarget
+	for p, data in pairs(state.espObjects) do
+		if not active[p] then
+			if data.billboard then data.billboard:Destroy() end
+			state.espObjects[p] = nil
+		end
+	end
 end
 
--- ===== CORE: CAMERA LOCK-ON (FIXED FOR FIRST-PERSON) =====
+-- ===== CAMERA LOCK FUNCTIONS =====
+local function canSeeTarget(from, to, targetChar)
+	local dir = (to - from).Unit
+	local dist = (to - from).Magnitude
+	CONFIG.RAYCAST_PARAMS:AddToFilter({character, targetChar})
+	local res = workspace:Raycast(from, dir * dist, CONFIG.RAYCAST_PARAMS)
+	return not res
+end
+
+local function isInDetectionRange(targetPos)
+	local delta = targetPos - humanoidRootPart.Position
+	return delta.X*delta.X + delta.Y*delta.Y + delta.Z*delta.Z <= CONFIG.DETECTION_RANGE_SQ
+end
+
+local function findNearestTarget()
+	local closest, minDist = nil, math.huge
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p == player then continue end
+		local char = p.Character
+		if not char then continue end
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		local head = char:FindFirstChild("Head")
+		local hum = char:FindFirstChild("Humanoid")
+		if not hrp or not head or not hum or hum.Health <= 0 then continue end
+		if not isInDetectionRange(hrp.Position) then continue end
+		if not canSeeTarget(humanoidRootPart.Position, head.Position, char) then continue end
+
+		local dist = (hrp.Position - humanoidRootPart.Position).Magnitude
+		if dist < minDist then
+			minDist = dist
+			closest = p
+		end
+	end
+	return closest
+end
+
 local function updateCameraLockOn()
 	if not state.lockedTarget or not state.lockedTarget.Character then
 		state.lockedTarget = nil
 		return
 	end
-
-	local targetChar = state.lockedTarget.Character
-	local targetHead = targetChar:FindFirstChild("Head")
-	local targetHumanoid = targetChar:FindFirstChild("Humanoid")
-
-	if not targetHead or not targetHumanoid or targetHumanoid.Health <= 0 then
+	local tChar = state.lockedTarget.Character
+	local tHead = tChar:FindFirstChild("Head")
+	local tHum = tChar:FindFirstChild("Humanoid")
+	if not tHead or not tHum or tHum.Health <= 0 then
 		state.lockedTarget = nil
 		return
 	end
 
-	-- **KEY FIX: Use relative rotation instead of absolute CFrame assignment**
-	-- This works WITH Roblox's touch camera system, not against it
+	local camPos = camera.CFrame.Position
+	local targetPos = tHead.Position + (tHead.CFrame.LookVector * CONFIG.HEAD_LEAD_OFFSET)
+	local dirToTarget = (targetPos - camPos).Unit
+	local currentDir = camera.CFrame.LookVector
+	local smoothed = currentDir:Lerp(dirToTarget, CONFIG.CAMERA_SMOOTHING)
 
-	local currentCameraPos = Camera.CFrame.Position
-	local targetPos = targetHead.Position + (targetHead.CFrame.LookVector * CONFIG.HEAD_LEAD_OFFSET)
+	camera.CFrame = CFrame.lookAt(camPos, camPos + smoothed)
 
-	-- Calculate direction to target
-	local directionToTarget = (targetPos - currentCameraPos).Unit
+	-- Update focus circle
+	local screenPos = camera:WorldToScreenPoint(tHead.Position)
+	focusFrame.Position = UDim2.new(0, screenPos.X - 35, 0, screenPos.Y - 35)
 
-	-- Get current camera direction
-	local currentDirection = Camera.CFrame.LookVector
-
-	-- Smooth lerp between current and target direction
-	local smoothedDirection = currentDirection:Lerp(directionToTarget, CONFIG.CAMERA_SMOOTHING)
-
-	-- **CRITICAL: Use CFrame.lookAt with smoothing to avoid override**
-	-- This maintains the camera position while rotating to look at target
-	Camera.CFrame = CFrame.lookAt(currentCameraPos, currentCameraPos + smoothedDirection)
-
-	-- Update focus circle position
-	local headScreenPos = worldToScreenPos(targetHead.Position)
-	focusCircle.Position = headScreenPos
-
-	-- Check if head moved outside unlock threshold (touch input conflict detection)
-	local centerScreenPos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-	local screenDistance = (headScreenPos - centerScreenPos).Magnitude
-
-	if screenDistance > CONFIG.UNLOCK_THRESHOLD then
-		-- Player swiped to move camera away, unlock immediately
+	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+	if (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude > CONFIG.UNLOCK_THRESHOLD then
 		state.lockedTarget = nil
-		focusCircle.Visible = false
-		toggleButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-		toggleButton.Text = "AIM: OFF"
+		focusFrame.Visible = false
+		aimToggle.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+		aimToggle.Text = "AIM LOCK: OFF"
 		state.isActive = false
 	end
 end
 
--- ===== CORE: INPUT TRACKING FOR SWIPE DETECTION =====
-local lastInputPos = Vector2.new(0, 0)
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if input.UserInputType == Enum.UserInputType.Touch or
-		input.UserInputType == Enum.UserInputType.MouseMovement then
-		state.lastInputTime = tick()
-		lastInputPos = input.Position
-	end
-end)
-
-UserInputService.InputChanged:Connect(function(input, gameProcessed)
-	if input.UserInputType == Enum.UserInputType.Touch or
-		input.UserInputType == Enum.UserInputType.MouseMovement then
-		state.inputDelta = input.Position - lastInputPos
-		lastInputPos = input.Position
-	end
-end)
-
--- ===== TOGGLE BUTTON =====
-toggleButton.MouseButton1Click:Connect(function()
+-- ===== AIM TOGGLE =====
+aimToggle.MouseButton1Click:Connect(function()
 	if state.isDragging then return end
-
 	state.isActive = not state.isActive
-
 	if state.isActive then
-		toggleButton.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
-		toggleButton.Text = "AIM: ON"
-		focusCircle.Visible = true
+		aimToggle.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
+		aimToggle.Text = "AIM LOCK: ON"
+		focusFrame.Visible = true
 		state.lockedTarget = findNearestTarget()
 	else
-		toggleButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-		toggleButton.Text = "AIM: OFF"
-		focusCircle.Visible = false
+		aimToggle.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+		aimToggle.Text = "AIM LOCK: OFF"
+		focusFrame.Visible = false
 		state.lockedTarget = nil
 	end
 end)
 
--- ===== MAIN LOOP: RENDER-STEPPED FOR CAMERA UPDATES =====
-local renderConnection = RunService.RenderStepped:Connect(function()
-	if not state.isActive or not state.lockedTarget then
-		focusCircle.Visible = false
-		return
+-- ===== INPUTS & LOOPS =====
+RunService.RenderStepped:Connect(function()
+	updateAllESP()
+	if state.isActive and state.lockedTarget then
+		updateCameraLockOn()
+	else
+		focusFrame.Visible = false
 	end
-
-	updateCameraLockOn()
 end)
 
--- ===== MAIN LOOP: HEARTBEAT FOR TARGET DETECTION =====
-local heartbeatConnection = RunService.Heartbeat:Connect(function()
-	if not state.isActive then return end
-
-	if not state.lockedTarget or not state.lockedTarget.Character then
+RunService.Heartbeat:Connect(function()
+	if state.isActive and (not state.lockedTarget or not state.lockedTarget.Character) then
 		state.lockedTarget = findNearestTarget()
 	end
 end)
 
--- ===== CHARACTER RESPAWN HANDLER =====
-player.CharacterAdded:Connect(function(newCharacter)
-	state.isActive = false
-	state.lockedTarget = nil
-	focusCircle.Visible = false
-	toggleButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-	toggleButton.Text = "AIM: OFF"
-
-	character = newCharacter
-	humanoidRootPart = character:WaitForChild("HumanoidRootPart")
-	humanoid = character:WaitForChild("Humanoid")
+-- Draggable
+local dragging = false
+local dragStartPos = Vector2.new()
+titleBar.MouseButton1Down:Connect(function()
+	dragging = true
+	dragStartPos = UserInputService:GetMouseLocation()
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = UserInputService:GetMouseLocation() - dragStartPos
+		mainFrame.Position = mainFrame.Position + UDim2.new(0, delta.X, 0, delta.Y)
+		dragStartPos = UserInputService:GetMouseLocation()
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
 end)
 
--- ===== CLEANUP =====
+-- Respawn
+player.CharacterAdded:Connect(function(newChar)
+	character = newChar
+	humanoidRootPart = newChar:WaitForChild("HumanoidRootPart")
+	humanoid = newChar:WaitForChild("Humanoid")
+end)
+
+-- Cleanup
 game:BindToClose(function()
-	if renderConnection then renderConnection:Disconnect() end
-	if heartbeatConnection then heartbeatConnection:Disconnect() end
-	focusCircle:Remove()
+	for _, data in pairs(state.espObjects) do
+		if data.billboard then data.billboard:Destroy() end
+	end
 	screenGui:Destroy()
 end)
 
-print("Camera Lock-On System loaded, boss man. Fuck yeah, first-person fixed.")
+print("ESP + Camera Lock-On loaded, boss man. Full native combo active.")
