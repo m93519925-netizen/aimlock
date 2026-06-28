@@ -23,7 +23,50 @@ FOVCircle.Filled = false
 FOVCircle.Radius = FOV_RADIUS
 FOVCircle.Visible = true
 
--- Hàm kiểm tra và tìm mục tiêu tối ưu nhất gần tâm màn hình
+-- BẢNG LƯU TRỮ ĐỐI TƯỢNG ESP ĐỂ QUẢN LÝ BỘ NHỚ
+local ESP_Storage = {}
+
+-- Hàm dọn dẹp vẽ ESP của một người chơi cụ thể
+local function removeESP(player)
+    if ESP_Storage[player] then
+        if ESP_Storage[player].Box then ESP_Storage[player].Box:Remove() end
+        if ESP_Storage[player].Tracer then ESP_Storage[player].Tracer:Remove() end
+        ESP_Storage[player] = nil
+    end
+end
+
+-- Hàm dọn dẹp toàn bộ dữ liệu ESP (Dùng khi tắt hệ thống)
+local function clearAllESP()
+    for player, _ in pairs(ESP_Storage) do
+        removeESP(player)
+    end
+end
+
+-- Tạo các đường nét ESP mới bằng Drawing API
+local function createESP(player)
+    if ESP_Storage[player] then return end
+
+    local box = Drawing.new("Square")
+    box.Thickness = 1
+    box.Color = Color3.fromRGB(255, 0, 0) -- Màu đỏ cho khung bao quanh
+    box.Filled = false
+    box.Visible = false
+
+    local tracer = Drawing.new("Line")
+    tracer.Thickness = 1
+    tracer.Color = Color3.fromRGB(255, 255, 255) -- Màu trắng cho đường kẻ từ dưới màn hình
+    tracer.Visible = false
+
+    ESP_Storage[player] = {
+        Box = box,
+        Tracer = tracer
+    }
+end
+
+-- Tự động quản lý khi người chơi thoát game
+Players.PlayerRemoving:Connect(removeESP)
+
+-- Hàm tìm mục tiêu khóa tâm tối ưu nhất
 local function getClosestPlayer()
     local closestPlayer = nil
     local shortestDistance = math.huge
@@ -35,7 +78,7 @@ local function getClosestPlayer()
             if humanoid.Health > 0 then
                 local targetPart = player.Character[TARGET_PART]
                 
-                -- Khởi tạo Raycast để kiểm tra vật cản (Line-of-Sight)
+                -- Kiểm tra vật cản (Line-of-Sight)
                 local raycastParams = RaycastParams.new()
                 raycastParams.FilterType = Enum.RaycastFilterType.Exclude
                 raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, player.Character}
@@ -44,14 +87,12 @@ local function getClosestPlayer()
                 local direction = targetPart.Position - origin
                 local raycastResult = workspace:Raycast(origin, direction, raycastParams)
                 
-                -- Nếu không có vật cản (tường, địa hình...) che khuất
                 if not raycastResult then
                     local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
                     if onScreen then
                         local targetPos2D = Vector2.new(screenPos.X, screenPos.Y)
                         local distanceToCenter = (targetPos2D - screenCenter).Magnitude
                         
-                        -- Kiểm tra xem mục tiêu có nằm trong vòng tròn FOV giới hạn không
                         if distanceToCenter <= FOV_RADIUS and distanceToCenter < shortestDistance then
                             closestPlayer = player
                             shortestDistance = distanceToCenter
@@ -64,18 +105,20 @@ local function getClosestPlayer()
     return closestPlayer
 end
 
--- Vòng lặp cập nhật hệ thống camera nâng cao
+-- Vòng lặp chính cập nhật Lock-On và vẽ ESP đồ họa
 local currentTarget = nil
 
 local function startAimbot()
-    -- Liên kết vào hệ thống Render với mức ưu tiên cao hơn Camera gốc của Roblox
     RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function()
         local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         FOVCircle.Position = screenCenter
 
-        if not AimbotEnabled then return end
+        if not AimbotEnabled then 
+            clearAllESP()
+            return 
+        end
 
-        -- Nếu chưa có mục tiêu hoặc mục tiêu cũ đã chết/thoát game, tiến hành quét tìm mục tiêu mới
+        -- LOGIC KHÓA CAMERA (LOCK-ON)
         if not currentTarget or not currentTarget.Character or not currentTarget.Character:FindFirstChild(TARGET_PART) or (currentTarget.Character:FindFirstChildOfClass("Humanoid") and currentTarget.Character:FindFirstChildOfClass("Humanoid").Health <= 0) then
             currentTarget = getClosestPlayer()
         end
@@ -86,16 +129,55 @@ local function startAimbot()
             local targetPos2D = Vector2.new(screenPos.X, screenPos.Y)
             local distanceToCenter = (targetPos2D - screenCenter).Magnitude
 
-            -- TÍNH NĂNG TỰ ĐỘNG HỦY KHÓA (UNLOCK):
-            -- Nếu người chơi vuốt mạnh màn hình khiến mục tiêu lệch ra ngoài bán kính 35px hoặc khuất màn hình
+            -- Tự động nhả khóa (Unlock) khi vuốt lệch tâm 35px
             if not onScreen or distanceToCenter > FOV_RADIUS then
-                currentTarget = nil -- Giải phóng mục tiêu để người chơi tự do điều khiển
-                return
+                currentTarget = nil
+            else
+                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
             end
+        end
 
-            -- KHẮC PHỤC LỖI GÓC NHÌN THỨ NHẤT:
-            -- Sử dụng CFrame.lookAt cập nhật trực tiếp vị trí hiện tại hướng thẳng về phía mục tiêu mượt mà
-            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
+        -- LOGIC VẼ VÀ CẬP NHẬT ĐỒ HỌA ESP
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local head = player.Character:FindFirstChild("Head")
+                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+
+                if head and root and humanoid and humanoid.Health > 0 then
+                    local hrpPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+                    
+                    if onScreen then
+                        createESP(player)
+                        local esp = ESP_Storage[player]
+
+                        if esp then
+                            -- Tính toán kích thước Box ESP dựa trên khoảng cách của mục tiêu
+                            local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                            local legPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+                            
+                            local boxHeight = math.abs(headPos.Y - legPos.Y)
+                            local boxWidth = boxHeight / 1.5
+
+                            -- Cập nhật thông số Khung hình hộp (Box)
+                            esp.Box.Size = Vector2.new(boxWidth, boxHeight)
+                            esp.Box.Position = Vector2.new(hrpPos.X - boxWidth / 2, hrpPos.Y - boxHeight / 2)
+                            esp.Box.Visible = true
+
+                            -- Cập nhật thông số Đường kẻ hướng (Tracer) từ đáy màn hình
+                            esp.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                            esp.Tracer.To = Vector2.new(hrpPos.X, hrpPos.Y + (boxHeight / 2))
+                            esp.Tracer.Visible = true
+                        end
+                    else
+                        removeESP(player)
+                    end
+                else
+                    removeESP(player)
+                end
+            else
+                removeESP(player)
+            end
         end
     end)
 end
@@ -104,9 +186,10 @@ local function stopAimbot()
     RunService:UnbindFromRenderStep(BIND_NAME)
     FOVCircle.Visible = false
     currentTarget = nil
+    clearAllESP()
 end
 
--- Bắt đầu chạy hệ thống
+-- Bắt đầu khởi chạy hệ thống lần đầu
 startAimbot()
 
 -- GIAO DIỆN ĐIỀU KHIỂN (GUI TOGGLE)
@@ -128,7 +211,7 @@ ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
 ToggleButton.Position = UDim2.new(0.15, 0, 0.25, 0)
 ToggleButton.Size = UDim2.new(0, 85, 0, 35)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "AIM: ON"
+ToggleButton.Text = "SYSTEM: ON"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 14.0
 ToggleButton.Active = true
@@ -136,7 +219,7 @@ ToggleButton.Active = true
 UICorner.CornerRadius = UDim.new(0, 8)
 UICorner.Parent = ToggleButton
 
--- Logic Kéo/Thả (Drag) tối ưu riêng cho màn hình cảm ứng Mobile
+-- Cấu trúc Kéo/Thả GUI trên cảm ứng Mobile
 local dragging, dragStart, startPos
 local function update(input)
     local delta = input.Position - dragStart
@@ -163,16 +246,16 @@ UserInputService.InputChanged:Connect(function(input)
     end
 end)
 
--- Sự kiện bật/tắt hệ thống
+-- Sự kiện nhấn nút kích hoạt hệ thống tổng
 ToggleButton.MouseButton1Click:Connect(function()
     AimbotEnabled = not AimbotEnabled
     if AimbotEnabled then
-        ToggleButton.Text = "AIM: ON"
+        ToggleButton.Text = "SYSTEM: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
         FOVCircle.Visible = true
         startAimbot()
     else
-        ToggleButton.Text = "AIM: OFF"
+        ToggleButton.Text = "SYSTEM: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
         stopAimbot()
     end
