@@ -1,293 +1,179 @@
--- ============================================================
--- Camera Lock‑On System – Mobile (Roblox / Delta Executor)
--- Tác giả: Hoàn thiện & Sửa lỗi
--- Ngôn ngữ: Luau
--- ============================================================
+-- Đợi game tải xong hoàn toàn dữ liệu người chơi
+if not game:IsLoaded() then game.Loaded:Wait() end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
-local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
+-- Đợi PlayerGui sẵn sàng
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- ================== CẤU HÌNH ==================
-local CONFIG = {
-    CircleRadius = 35,          -- bán kính vòng tròn (pixel)
-    MaxLockDistance = 200,      -- khoảng cách tối đa để tìm mục tiêu (studs)
-    ScanInterval = 0.15,        -- thời gian giữa các lần quét (giây)
-    CircleColor = Color3.fromRGB(0, 255, 0),
-    CircleThickness = 2,
-}
+local AimbotEnabled = true
+local FOV_RADIUS = 35 
+local TARGET_PART = "Head"
+local BIND_NAME = "MobileCameraLockSystem"
 
--- ================== BIẾN TOÀN CỤC ==================
-local isAimEnabled = false
-local currentTarget = nil
-local circleObject = nil
-local toggleButton = nil
-local renderConnection = nil
-local scanConnection = nil
-local lastScanTime = 0
+-- Khởi tạo vòng tròn FOV bằng Drawing API
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1.5
+FOVCircle.Color = Color3.fromRGB(0, 255, 0)
+FOVCircle.Filled = false
+FOVCircle.Radius = FOV_RADIUS
+FOVCircle.Visible = true
 
--- Khai báo trước (Forward Declaration) để tránh lỗi gọi hàm trước khi định nghĩa
-local unlockTarget 
+-- Hàm kiểm tra và tìm mục tiêu tối ưu nhất gần tâm màn hình
+local function getClosestPlayer()
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
--- ================== HÀM VẼ VÒNG TRÒN ==================
-local function createCircle()
-    if circleObject then return end
-    circleObject = Drawing.new("Circle")
-    circleObject.Visible = false
-    circleObject.Radius = CONFIG.CircleRadius
-    circleObject.Thickness = CONFIG.CircleThickness
-    circleObject.Color = CONFIG.CircleColor
-    circleObject.Filled = false
-    circleObject.Transparency = 1
-    circleObject.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-end
-
-local function updateCirclePosition()
-    if circleObject then
-        circleObject.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    end
-end
-
--- ================== KIỂM TRA TẦM NHÌN (LINE‑OF‑SIGHT) ==================
-local function hasLineOfSight(from, to)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {character, Camera}
-    local result = Workspace:Raycast(from, to - from, params)
-    return result == nil
-end
-
--- ================== KIỂM TRA MỤC TIÊU TRONG VÒNG TRÒN ==================
-local function isTargetInCircle(targetHead)
-    if not targetHead then return false end
-    local screenPos, onScreen = Camera:WorldToScreenPoint(targetHead.Position)
-    if not onScreen then return false end
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    local distance = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-    return distance <= CONFIG.CircleRadius
-end
-
--- ================== TÌM MỤC TIÊU TỐT NHẤT ==================
-local function findBestTarget()
-    if not character or not character.PrimaryPart then return nil end
-    local head = character:FindFirstChild("Head")
-    if not head then return nil end
-
-    local origin = head.Position
-    local bestTarget = nil
-    local bestDist = math.huge
-
-    for _, otherPlayer in pairs(Players:GetPlayers()) do
-        if otherPlayer ~= player then
-            local otherChar = otherPlayer.Character
-            if otherChar and otherChar.PrimaryPart then
-                local otherHead = otherChar:FindFirstChild("Head")
-                if otherHead and otherHead.Parent then
-                    local targetPos = otherHead.Position
-                    local dist = (origin - targetPos).Magnitude
-                    if dist < CONFIG.MaxLockDistance and dist < bestDist then
-                        if hasLineOfSight(Camera.CFrame.Position, targetPos) and isTargetInCircle(otherHead) then
-                            bestTarget = otherChar
-                            bestDist = dist
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(TARGET_PART) and player.Character:FindFirstChildOfClass("Humanoid") then
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid.Health > 0 then
+                local targetPart = player.Character[TARGET_PART]
+                
+                -- Khởi tạo Raycast để kiểm tra vật cản (Line-of-Sight)
+                local raycastParams = RaycastParams.new()
+                raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+                raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, player.Character}
+                
+                local origin = Camera.CFrame.Position
+                local direction = targetPart.Position - origin
+                local raycastResult = workspace:Raycast(origin, direction, raycastParams)
+                
+                -- Nếu không có vật cản (tường, địa hình...) che khuất
+                if not raycastResult then
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+                    if onScreen then
+                        local targetPos2D = Vector2.new(screenPos.X, screenPos.Y)
+                        local distanceToCenter = (targetPos2D - screenCenter).Magnitude
+                        
+                        -- Kiểm tra xem mục tiêu có nằm trong vòng tròn FOV giới hạn không
+                        if distanceToCenter <= FOV_RADIUS and distanceToCenter < shortestDistance then
+                            closestPlayer = player
+                            shortestDistance = distanceToCenter
                         end
                     end
                 end
             end
         end
     end
-    return bestTarget
+    return closestPlayer
 end
 
--- ================== CẬP NHẬT CAMERA ==================
-local function updateCamera(targetHead)
-    if not targetHead or not targetHead.Parent then
-        unlockTarget()
-        return
-    end
+-- Vòng lặp cập nhật hệ thống camera nâng cao
+local currentTarget = nil
 
-    local currentPos = Camera.CFrame.Position
-    local targetPos = targetHead.Position
+local function startAimbot()
+    -- Liên kết vào hệ thống Render với mức ưu tiên cao hơn Camera gốc của Roblox
+    RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function()
+        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        FOVCircle.Position = screenCenter
 
-    if not hasLineOfSight(currentPos, targetPos) or not isTargetInCircle(targetHead) then
-        unlockTarget()
-        return
-    end
+        if not AimbotEnabled then return end
 
-    Camera.CFrame = CFrame.lookAt(currentPos, targetPos)
-end
+        -- Nếu chưa có mục tiêu hoặc mục tiêu cũ đã chết/thoát game, tiến hành quét tìm mục tiêu mới
+        if not currentTarget or not currentTarget.Character or not currentTarget.Character:FindFirstChild(TARGET_PART) or (currentTarget.Character:FindFirstChildOfClass("Humanoid") and currentTarget.Character:FindFirstChildOfClass("Humanoid").Health <= 0) then
+            currentTarget = getClosestPlayer()
+        end
 
--- ================== KHÓA / MỞ KHÓA MỤC TIÊU ==================
-local function lockTarget(target)
-    if currentTarget == target then return end
-    unlockTarget()
+        if currentTarget and currentTarget.Character and currentTarget.Character:FindFirstChild(TARGET_PART) then
+            local targetPart = currentTarget.Character[TARGET_PART]
+            local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+            local targetPos2D = Vector2.new(screenPos.X, screenPos.Y)
+            local distanceToCenter = (targetPos2D - screenCenter).Magnitude
 
-    currentTarget = target
-    if circleObject then circleObject.Visible = true end
-
-    if renderConnection then renderConnection:Disconnect() end
-    renderConnection = RunService.RenderStepped:Connect(function()
-        if currentTarget then
-            local head = currentTarget:FindFirstChild("Head")
-            if head and head.Parent then
-                updateCamera(head)
-            else
-                unlockTarget()
+            -- TÍNH NĂNG TỰ ĐỘNG HỦY KHÓA (UNLOCK):
+            -- Nếu người chơi vuốt mạnh màn hình khiến mục tiêu lệch ra ngoài bán kính 35px hoặc khuất màn hình
+            if not onScreen or distanceToCenter > FOV_RADIUS then
+                currentTarget = nil -- Giải phóng mục tiêu để người chơi tự do điều khiển
+                return
             end
+
+            -- KHẮC PHỤC LỖI GÓC NHÌN THỨ NHẤT:
+            -- Sử dụng CFrame.lookAt cập nhật trực tiếp vị trí hiện tại hướng thẳng về phía mục tiêu mượt mà
+            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
         end
     end)
 end
 
--- Định nghĩa hàm unlockTarget đã khai báo ở trên
-unlockTarget = function()
+local function stopAimbot()
+    RunService:UnbindFromRenderStep(BIND_NAME)
+    FOVCircle.Visible = false
     currentTarget = nil
-    if renderConnection then
-        renderConnection:Disconnect()
-        renderConnection = nil
-    end
-    if circleObject then circleObject.Visible = false end
 end
 
--- ================== QUÉT TÌM MỤC TIÊU ĐỊNH KỲ ==================
-local function scanForTarget()
-    if not isAimEnabled then return end
+-- Bắt đầu chạy hệ thống
+startAimbot()
 
-    if currentTarget then
-        local head = currentTarget:FindFirstChild("Head")
-        if not head or not head.Parent or not hasLineOfSight(Camera.CFrame.Position, head.Position) or not isTargetInCircle(head) then
-            unlockTarget()
-        end
-    end
-
-    if not currentTarget then
-        local newTarget = findBestTarget()
-        if newTarget then
-            lockTarget(newTarget)
-        end
-    end
+-- GIAO DIỆN ĐIỀU KHIỂN (GUI TOGGLE)
+if PlayerGui:FindFirstChild("MobileAimbotGui") then
+    PlayerGui.MobileAimbotGui:Destroy()
 end
 
--- ================== BẬT / TẮT HỆ THỐNG ==================
-local function toggleAim()
-    isAimEnabled = not isAimEnabled
+local ScreenGui = Instance.new("ScreenGui")
+local ToggleButton = Instance.new("TextButton")
+local UICorner = Instance.new("UICorner")
 
-    if isAimEnabled then
-        createCircle()
-        updateCirclePosition()
-        circleObject.Visible = true
+ScreenGui.Name = "MobileAimbotGui"
+ScreenGui.Parent = PlayerGui
+ScreenGui.ResetOnSpawn = false
 
-        if scanConnection then scanConnection:Disconnect() end
-        scanConnection = RunService.Heartbeat:Connect(function()
-            local now = tick()
-            if now - lastScanTime >= CONFIG.ScanInterval then
-                lastScanTime = now
-                scanForTarget()
+ToggleButton.Name = "ToggleButton"
+ToggleButton.Parent = ScreenGui
+ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+ToggleButton.Position = UDim2.new(0.15, 0, 0.25, 0)
+ToggleButton.Size = UDim2.new(0, 85, 0, 35)
+ToggleButton.Font = Enum.Font.SourceSansBold
+ToggleButton.Text = "AIM: ON"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.TextSize = 14.0
+ToggleButton.Active = true
+
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = ToggleButton
+
+-- Logic Kéo/Thả (Drag) tối ưu riêng cho màn hình cảm ứng Mobile
+local dragging, dragStart, startPos
+local function update(input)
+    local delta = input.Position - dragStart
+    ToggleButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+ToggleButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = ToggleButton.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
             end
         end)
-
-        scanForTarget()
-        if toggleButton then toggleButton.Text = "AIM: ON" end
     end
-end
+end)
 
--- ================== TẠO NÚT BẤM (TOGGLE + KÉO THẢ) ==================
-local function createToggleButton()
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Parent = player.PlayerGui
-    screenGui.Name = "AIMLockGUI"
-    screenGui.ResetOnSpawn = false
-
-    -- SỬA: Đổi từ "Frame" thành "TextButton" để dùng được sự kiện Click/Tap công khai
-    local frame = Instance.new("TextButton")
-    frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 90, 0, 45)
-    frame.Position = UDim2.new(0, 10, 1, -60)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    frame.BackgroundTransparency = 0.4
-    frame.BorderSizePixel = 0
-    frame.Active = true
-    frame.Text = "AIM: OFF"
-    frame.TextColor3 = Color3.fromRGB(255, 255, 255)
-    frame.TextSize = 16
-    frame.Font = Enum.Font.SourceSansBold
-
-    local corner = Instance.new("UICorner")
-    corner.Parent = frame
-    corner.CornerRadius = UDim.new(0, 8)
-
-    toggleButton = frame
-
-    -- === XỬ LÝ KÉO THẢ ===
-    local dragging = false
-    local dragStartPos = nil
-    local startFramePos = nil
-    local dragInput = nil
-
-    local function updateDrag(input)
-        if not dragging or not dragStartPos or not startFramePos then return end
-        local delta = input.Position - dragStartPos
-        local newPos = UDim2.new(
-            startFramePos.X.Scale + delta.X / screenGui.AbsoluteSize.X,
-            0,
-            startFramePos.Y.Scale + delta.Y / screenGui.AbsoluteSize.Y,
-            0
-        )
-        frame.Position = newPos
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        update(input)
     end
+end)
 
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStartPos = input.Position
-            startFramePos = frame.Position
-            dragInput = input
-            
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                    dragStartPos = nil
-                    startFramePos = nil
-                    dragInput = nil
-                end
-            end)
-        end
-    end)
-
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.Mouse then
-            dragInput = input
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            updateDrag(input)
-        end
-    end)
-
-    -- === SỰ KIỆN CLICK / TAP ===
-    frame.MouseButton1Click:Connect(toggleAim)
-
-    return screenGui
-end
-
--- ================== KHỞI TẠO ==================
-local function init()
-    createCircle()
-    createToggleButton()
-    Camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateCirclePosition)
-end
-
-init()
-
-player.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    if isAimEnabled then
-        unlockTarget()
-        scanForTarget()
+-- Sự kiện bật/tắt hệ thống
+ToggleButton.MouseButton1Click:Connect(function()
+    AimbotEnabled = not AimbotEnabled
+    if AimbotEnabled then
+        ToggleButton.Text = "AIM: ON"
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        FOVCircle.Visible = true
+        startAimbot()
+    else
+        ToggleButton.Text = "AIM: OFF"
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        stopAimbot()
     end
 end)
