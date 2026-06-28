@@ -1,5 +1,5 @@
 -- Roblox Professional ESP + Camera Lock-On System
--- Combined native implementation. Zero external deps. Optimized for mobile/PC.
+-- Combined native implementation. Zero external deps. Fully draggable GUI.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -15,14 +15,11 @@ local CONFIG = {
 	-- ESP
 	ESP_ENABLED = true,
 	MAX_DISTANCE = 500,
-	BOX_THICKNESS = 1,
-	TEXT_SIZE = 14,
 	ENEMY_COLOR = Color3.fromRGB(255, 0, 0),
 	TEAMMATE_COLOR = Color3.fromRGB(0, 255, 0),
 	NEUTRAL_COLOR = Color3.fromRGB(255, 255, 255),
 	HEALTH_COLOR_GOOD = Color3.fromRGB(0, 255, 0),
 	HEALTH_COLOR_BAD = Color3.fromRGB(255, 0, 0),
-	SHOW_BOXES = true,
 	SHOW_NAMES = true,
 	SHOW_DISTANCE = true,
 	SHOW_HEALTH = true,
@@ -40,15 +37,9 @@ CONFIG.RAYCAST_PARAMS.FilterType = Enum.RaycastFilterType.Blacklist
 
 -- ===== STATE =====
 local state = {
-	-- ESP
 	espObjects = {},
-	-- Camera Lock
 	isActive = false,
 	lockedTarget = nil,
-	isDragging = false,
-	dragStart = Vector2.new(0, 0),
-	startPos = nil,
-	inputDelta = Vector2.new(0, 0)
 }
 
 -- ===== MAIN SCREEN GUI =====
@@ -57,7 +48,6 @@ screenGui.Name = "ProESP_AimGui"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
--- ESP Control Panel
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
 mainFrame.Size = UDim2.new(0, 250, 0, 380)
@@ -65,30 +55,25 @@ mainFrame.Position = UDim2.new(0.98, -260, 0.05, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 mainFrame.BorderSizePixel = 0
 mainFrame.Parent = screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
 
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 8)
-corner.Parent = mainFrame
-
--- Title
+-- Title Bar (Draggable)
 local titleBar = Instance.new("Frame")
 titleBar.Size = UDim2.new(1, 0, 0, 35)
 titleBar.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
 titleBar.BorderSizePixel = 0
 titleBar.Parent = mainFrame
-local titleCorner = Instance.new("UICorner")
-titleCorner.CornerRadius = UDim.new(0, 8)
-titleCorner.Parent = titleBar
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 8)
+
 local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -80, 1, 0)
 titleLabel.BackgroundTransparency = 1
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 14
 titleLabel.Font = Enum.Font.GothamBold
-titleLabel.Text = "ESP + AIMBOT"
+titleLabel.Text = "ESP + AIM LOCK"
 titleLabel.Parent = titleBar
 
--- Close
 local closeButton = Instance.new("TextButton")
 closeButton.Size = UDim2.new(0, 40, 1, 0)
 closeButton.Position = UDim2.new(1, -40, 0, 0)
@@ -98,6 +83,7 @@ closeButton.Text = "X"
 closeButton.Font = Enum.Font.GothamBold
 closeButton.BorderSizePixel = 0
 closeButton.Parent = titleBar
+Instance.new("UICorner", closeButton).CornerRadius = UDim.new(0, 4)
 closeButton.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 
 local contentFrame = Instance.new("ScrollingFrame")
@@ -107,6 +93,43 @@ contentFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 contentFrame.ScrollBarThickness = 4
 contentFrame.CanvasSize = UDim2.new(0, 0, 0, 520)
 contentFrame.Parent = mainFrame
+
+-- ===== DRAGGABLE SYSTEM (Mouse + Touch) =====
+local dragging = false
+local dragInput
+local dragStart
+local startPos
+
+local function updateDrag(input)
+	local delta = input.Position - dragStart
+	mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = mainFrame.Position
+		
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+titleBar.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input == dragInput) then
+		updateDrag(input)
+	end
+end)
 
 -- ===== TOGGLE HELPERS =====
 local function createToggle(parent, label, initialState, callback, yPos)
@@ -149,14 +172,14 @@ local function createToggle(parent, label, initialState, callback, yPos)
 	end)
 end
 
--- ESP Toggles
+-- Toggles
 createToggle(contentFrame, "Enable ESP", CONFIG.ESP_ENABLED, function(s) CONFIG.ESP_ENABLED = s end, 10)
 createToggle(contentFrame, "Show Names", CONFIG.SHOW_NAMES, function(s) CONFIG.SHOW_NAMES = s end, 50)
 createToggle(contentFrame, "Show Distance", CONFIG.SHOW_DISTANCE, function(s) CONFIG.SHOW_DISTANCE = s end, 90)
 createToggle(contentFrame, "Show Health", CONFIG.SHOW_HEALTH, function(s) CONFIG.SHOW_HEALTH = s end, 130)
 createToggle(contentFrame, "Team Colors", CONFIG.SHOW_TEAM_COLOR, function(s) CONFIG.SHOW_TEAM_COLOR = s end, 170)
 
--- AIM Toggle (big button)
+-- AIM Toggle
 local aimToggle = Instance.new("TextButton")
 aimToggle.Size = UDim2.new(0.9, 0, 0, 50)
 aimToggle.Position = UDim2.new(0.05, 0, 0, 220)
@@ -170,27 +193,23 @@ Instance.new("UICorner", aimToggle).CornerRadius = UDim.new(0, 8)
 
 -- ===== FOCUS CIRCLE =====
 local focusFrame = Instance.new("Frame")
-focusFrame.Name = "FocusCircle"
 focusFrame.Size = UDim2.new(0, 70, 0, 70)
 focusFrame.BackgroundTransparency = 1
-focusFrame.BorderSizePixel = 0
 focusFrame.Visible = false
 focusFrame.Parent = screenGui
 
-local outer = Instance.new("Frame")
-outer.Size = UDim2.new(1,0,1,0)
-outer.BackgroundTransparency = 1
-outer.BorderSizePixel = 2
-outer.BorderColor3 = Color3.fromRGB(0, 255, 0)
-outer.Parent = focusFrame
+Instance.new("Frame", focusFrame).Size = UDim2.new(1,0,1,0)
+focusFrame:FindFirstChildWhichIsA("Frame").BackgroundTransparency = 1
+focusFrame:FindFirstChildWhichIsA("Frame").BorderSizePixel = 2
+focusFrame:FindFirstChildWhichIsA("Frame").BorderColor3 = Color3.fromRGB(0, 255, 0)
 
-local inner = Instance.new("Frame")
-inner.Size = UDim2.new(0.6,0,0.6,0)
-inner.Position = UDim2.new(0.2,0,0.2,0)
-inner.BackgroundTransparency = 1
-inner.BorderSizePixel = 2
-inner.BorderColor3 = Color3.fromRGB(0, 255, 0)
-inner.Parent = focusFrame
+local innerCircle = Instance.new("Frame")
+innerCircle.Size = UDim2.new(0.6,0,0.6,0)
+innerCircle.Position = UDim2.new(0.2,0,0.2,0)
+innerCircle.BackgroundTransparency = 1
+innerCircle.BorderSizePixel = 2
+innerCircle.BorderColor3 = Color3.fromRGB(0, 255, 0)
+innerCircle.Parent = focusFrame
 
 -- ===== ESP FUNCTIONS =====
 local function getPlayerColor(targetPlayer)
@@ -219,7 +238,7 @@ local function createESPBillboard(targetChar, targetPlayer)
 	nameLabel.Position = UDim2.new(0,0,0,5)
 	nameLabel.BackgroundTransparency = 1
 	nameLabel.TextColor3 = getPlayerColor(targetPlayer)
-	nameLabel.TextSize = CONFIG.TEXT_SIZE
+	nameLabel.TextSize = 14
 	nameLabel.Font = Enum.Font.GothamBold
 	nameLabel.Text = targetPlayer.Name
 	nameLabel.Parent = bg
@@ -289,8 +308,7 @@ local function updateESPBillboard(targetPlayer, espData)
 		espData.healthLabel.Text = "HP: " .. math.floor(health) .. "/" .. math.floor(maxH)
 		local perc = math.clamp(health / maxH, 0, 1)
 		espData.healthBarFill.Size = UDim2.new(perc, 0, 1, 0)
-		local hpColor = CONFIG.HEALTH_COLOR_BAD:Lerp(CONFIG.HEALTH_COLOR_GOOD, perc)
-		espData.healthBarFill.BackgroundColor3 = hpColor
+		espData.healthBarFill.BackgroundColor3 = CONFIG.HEALTH_COLOR_BAD:Lerp(CONFIG.HEALTH_COLOR_GOOD, perc)
 		espData.healthLabel.Visible = true
 	else
 		espData.healthLabel.Visible = false
@@ -304,9 +322,7 @@ end
 
 local function updateAllESP()
 	if not CONFIG.ESP_ENABLED then
-		for _, data in pairs(state.espObjects) do
-			if data.billboard then data.billboard:Destroy() end
-		end
+		for _, data in pairs(state.espObjects) do if data.billboard then data.billboard:Destroy() end end
 		state.espObjects = {}
 		return
 	end
@@ -336,13 +352,12 @@ local function updateAllESP()
 	end
 end
 
--- ===== CAMERA LOCK FUNCTIONS =====
+-- ===== CAMERA LOCK =====
 local function canSeeTarget(from, to, targetChar)
 	local dir = (to - from).Unit
 	local dist = (to - from).Magnitude
 	CONFIG.RAYCAST_PARAMS:AddToFilter({character, targetChar})
-	local res = workspace:Raycast(from, dir * dist, CONFIG.RAYCAST_PARAMS)
-	return not res
+	return not workspace:Raycast(from, dir * dist, CONFIG.RAYCAST_PARAMS)
 end
 
 local function isInDetectionRange(targetPos)
@@ -364,19 +379,13 @@ local function findNearestTarget()
 		if not canSeeTarget(humanoidRootPart.Position, head.Position, char) then continue end
 
 		local dist = (hrp.Position - humanoidRootPart.Position).Magnitude
-		if dist < minDist then
-			minDist = dist
-			closest = p
-		end
+		if dist < minDist then minDist = dist closest = p end
 	end
 	return closest
 end
 
 local function updateCameraLockOn()
-	if not state.lockedTarget or not state.lockedTarget.Character then
-		state.lockedTarget = nil
-		return
-	end
+	if not state.lockedTarget or not state.lockedTarget.Character then return end
 	local tChar = state.lockedTarget.Character
 	local tHead = tChar:FindFirstChild("Head")
 	local tHum = tChar:FindFirstChild("Humanoid")
@@ -390,10 +399,8 @@ local function updateCameraLockOn()
 	local dirToTarget = (targetPos - camPos).Unit
 	local currentDir = camera.CFrame.LookVector
 	local smoothed = currentDir:Lerp(dirToTarget, CONFIG.CAMERA_SMOOTHING)
-
 	camera.CFrame = CFrame.lookAt(camPos, camPos + smoothed)
 
-	-- Update focus circle
 	local screenPos = camera:WorldToScreenPoint(tHead.Position)
 	focusFrame.Position = UDim2.new(0, screenPos.X - 35, 0, screenPos.Y - 35)
 
@@ -407,9 +414,8 @@ local function updateCameraLockOn()
 	end
 end
 
--- ===== AIM TOGGLE =====
+-- AIM Toggle
 aimToggle.MouseButton1Click:Connect(function()
-	if state.isDragging then return end
 	state.isActive = not state.isActive
 	if state.isActive then
 		aimToggle.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
@@ -424,7 +430,7 @@ aimToggle.MouseButton1Click:Connect(function()
 	end
 end)
 
--- ===== INPUTS & LOOPS =====
+-- ===== MAIN LOOPS =====
 RunService.RenderStepped:Connect(function()
 	updateAllESP()
 	if state.isActive and state.lockedTarget then
@@ -440,25 +446,7 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
--- Draggable
-local dragging = false
-local dragStartPos = Vector2.new()
-titleBar.MouseButton1Down:Connect(function()
-	dragging = true
-	dragStartPos = UserInputService:GetMouseLocation()
-end)
-UserInputService.InputChanged:Connect(function(input)
-	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-		local delta = UserInputService:GetMouseLocation() - dragStartPos
-		mainFrame.Position = mainFrame.Position + UDim2.new(0, delta.X, 0, delta.Y)
-		dragStartPos = UserInputService:GetMouseLocation()
-	end
-end)
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-end)
-
--- Respawn
+-- Respawn Handler
 player.CharacterAdded:Connect(function(newChar)
 	character = newChar
 	humanoidRootPart = newChar:WaitForChild("HumanoidRootPart")
@@ -473,4 +461,4 @@ game:BindToClose(function()
 	screenGui:Destroy()
 end)
 
-print("ESP + Camera Lock-On loaded, boss man. Full native combo active.")
+print("ESP + Camera Lock-On loaded. GUI is now fully draggable (mouse + touch). Boss man approved.")
