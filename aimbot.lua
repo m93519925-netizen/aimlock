@@ -1,443 +1,354 @@
--- Nyx Camera Lock-On System for Roblox Mobile (Delta Executor)
--- Professional, Optimized, First-Person Fixed
+-- ============================================================
+-- Camera Lock‑On System – Mobile (Roblox / Delta Executor)
+-- Tác giả: [Your Name]
+-- Ngôn ngữ: Luau
+-- ============================================================
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-local GuiService = game:GetService("GuiService")
-
-local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
-local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
 
--- Config
-local AIM_RADIUS = 35 -- pixels
-local SMOOTHNESS = 0.15 -- lower = faster lock
-local MAX_DISTANCE = 500
-local TOGGLE_KEY = Enum.KeyCode.F -- fallback if needed
+-- ================== CẤU HÌNH ==================
+local CONFIG = {
+    CircleRadius = 35,          -- bán kính vòng tròn (pixel)
+    MaxLockDistance = 200,      -- khoảng cách tối đa để tìm mục tiêu (studs)
+    ScanInterval = 0.15,        -- thời gian giữa các lần quét (giây)
+    CircleColor = Color3.fromRGB(0, 255, 0),
+    CircleThickness = 2,
+}
 
-local isAiming = false
+-- ================== BIẾN TOÀN CỤC ==================
+local isAimEnabled = false
 local currentTarget = nil
-local circle = nil
+local circleObject = nil
 local toggleButton = nil
+local renderConnection = nil
+local scanConnection = nil
+local lastScanTime = 0
 
--- Create Drawing Circle
+-- ================== HÀM VẼ VÒNG TRÒN ==================
 local function createCircle()
-	if circle then circle:Remove() end
-	circle = Drawing.new("Circle")
-	circle.Color = Color3.fromRGB(0, 255, 0)
-	circle.Thickness = 2
-	circle.NumSides = 64
-	circle.Radius = AIM_RADIUS
-	circle.Filled = false
-	circle.Transparency = 0.7
-	circle.Visible = false
+    if circleObject then return end
+    circleObject = Drawing.new("Circle")
+    circleObject.Visible = false
+    circleObject.Radius = CONFIG.CircleRadius
+    circleObject.Thickness = CONFIG.CircleThickness
+    circleObject.Color = CONFIG.CircleColor
+    circleObject.Filled = false
+    circleObject.Transparency = 1
+    circleObject.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 end
 
--- Create Draggable Toggle Button
+local function updateCirclePosition()
+    if circleObject then
+        circleObject.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    end
+end
+
+local function destroyCircle()
+    if circleObject then
+        circleObject:Remove()
+        circleObject = nil
+    end
+end
+
+-- ================== KIỂM TRA TẦM NHÌN (LINE‑OF‑SIGHT) ==================
+local function hasLineOfSight(from, to)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character, Camera}
+    local result = Workspace:Raycast(from, to - from, params)
+    return result == nil
+end
+
+-- ================== TÌM MỤC TIÊU TỐT NHẤT ==================
+local function findBestTarget()
+    if not character or not character.PrimaryPart then
+        return nil
+    end
+    local head = character:FindFirstChild("Head")
+    if not head then return nil end
+
+    local origin = head.Position
+    local bestTarget = nil
+    local bestDist = math.huge
+
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player then
+            local otherChar = otherPlayer.Character
+            if otherChar and otherChar.PrimaryPart then
+                local otherHead = otherChar:FindFirstChild("Head")
+                if otherHead and otherHead.Parent then
+                    local targetPos = otherHead.Position
+                    local dist = (origin - targetPos).Magnitude
+                    if dist < CONFIG.MaxLockDistance and dist < bestDist then
+                        -- Kiểm tra tầm nhìn từ camera đến đầu mục tiêu
+                        if hasLineOfSight(Camera.CFrame.Position, targetPos) then
+                            bestTarget = otherChar
+                            bestDist = dist
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return bestTarget
+end
+
+-- ================== KIỂM TRA MỤC TIÊU TRONG VÒNG TRÒN ==================
+local function isTargetInCircle(targetHead)
+    if not targetHead then return false end
+    local screenPos, onScreen = Camera:WorldToScreenPoint(targetHead.Position)
+    if not onScreen then return false end
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local distance = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+    return distance <= CONFIG.CircleRadius
+end
+
+-- ================== CẬP NHẬT CAMERA ==================
+local function updateCamera(targetHead)
+    if not targetHead or not targetHead.Parent then
+        unlockTarget()
+        return
+    end
+
+    local currentPos = Camera.CFrame.Position
+    local targetPos = targetHead.Position
+
+    -- Kiểm tra tầm nhìn
+    if not hasLineOfSight(currentPos, targetPos) then
+        unlockTarget()
+        return
+    end
+
+    -- Kiểm tra trong vòng tròn
+    if not isTargetInCircle(targetHead) then
+        unlockTarget()
+        return
+    end
+
+    -- Cập nhật hướng camera (giữ nguyên vị trí, chỉ xoay về mục tiêu)
+    Camera.CFrame = CFrame.lookAt(currentPos, targetPos)
+end
+
+-- ================== KHÓA / MỞ KHÓA MỤC TIÊU ==================
+local function lockTarget(target)
+    if currentTarget == target then return end
+    unlockTarget()
+
+    currentTarget = target
+    if circleObject then circleObject.Visible = true end
+
+    -- Kết nối RenderStepped để cập nhật camera liên tục
+    if renderConnection then renderConnection:Disconnect() end
+    renderConnection = RunService.RenderStepped:Connect(function()
+        if currentTarget then
+            local head = currentTarget:FindFirstChild("Head")
+            if head and head.Parent then
+                updateCamera(head)
+            else
+                unlockTarget()
+            end
+        end
+    end)
+end
+
+local function unlockTarget()
+    currentTarget = nil
+    if renderConnection then
+        renderConnection:Disconnect()
+        renderConnection = nil
+    end
+    if circleObject then circleObject.Visible = false end
+end
+
+-- ================== QUÉT TÌM MỤC TIÊU ĐỊNH KỲ ==================
+local function scanForTarget()
+    if not isAimEnabled then return end
+
+    -- Nếu đang có target, kiểm tra tính hợp lệ
+    if currentTarget then
+        local head = currentTarget:FindFirstChild("Head")
+        if not head or not head.Parent then
+            unlockTarget()
+        else
+            -- Nếu mất tầm nhìn hoặc ra khỏi vòng tròn → unlock
+            if not hasLineOfSight(Camera.CFrame.Position, head.Position) or not isTargetInCircle(head) then
+                unlockTarget()
+            end
+        end
+    end
+
+    -- Nếu chưa có target, tìm mới
+    if not currentTarget then
+        local newTarget = findBestTarget()
+        if newTarget then
+            lockTarget(newTarget)
+        end
+    end
+end
+
+-- ================== BẬT / TẮT HỆ THỐNG ==================
+local function toggleAim()
+    isAimEnabled = not isAimEnabled
+
+    if isAimEnabled then
+        -- Tạo vòng tròn nếu chưa có
+        createCircle()
+        updateCirclePosition()
+        circleObject.Visible = true
+
+        -- Bắt đầu quét
+        if scanConnection then scanConnection:Disconnect() end
+        scanConnection = RunService.Heartbeat:Connect(function()
+            -- Giới hạn tần suất quét để tiết kiệm tài nguyên
+            local now = tick()
+            if now - lastScanTime >= CONFIG.ScanInterval then
+                lastScanTime = now
+                scanForTarget()
+            end
+        end)
+
+        -- Quét ngay lập tức
+        scanForTarget()
+        if toggleButton then toggleButton.Text = "AIM: ON" end
+    else
+        -- Tắt hoàn toàn
+        if scanConnection then
+            scanConnection:Disconnect()
+            scanConnection = nil
+        end
+        unlockTarget()
+        if circleObject then circleObject.Visible = false end
+        if toggleButton then toggleButton.Text = "AIM: OFF" end
+    end
+end
+
+-- ================== TẠO NÚT BẤM (TOGGLE + KÉO THẢ) ==================
 local function createToggleButton()
-	local screenGui = Instance.new("ScreenGui")
-	screenGui.ResetOnSpawn = false
-	screenGui.Parent = playerGui
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = player.PlayerGui
+    screenGui.Name = "AIMLockGUI"
+    screenGui.ResetOnSpawn = false
 
-	toggleButton = Instance.new("TextButton")
-	toggleButton.Size = UDim2.new(0, 80, 0, 40)
-	toggleButton.Position = UDim2.new(0.5, -40, 0.1, 0)
-	toggleButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	toggleButton.BackgroundTransparency = 0.3
-	toggleButton.Text = "AIM: OFF"
-	toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	toggleButton.TextScaled = true
-	toggleButton.Font = Enum.Font.GothamBold
-	toggleButton.BorderSizePixel = 0
-	toggleButton.Parent = screenGui
+    local frame = Instance.new("Frame")
+    frame.Parent = screenGui
+    frame.Size = UDim2.new(0, 70, 0, 40)
+    frame.Position = UDim2.new(0, 10, 1, -50)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    frame.BackgroundTransparency = 0.6
+    frame.BorderSizePixel = 0
+    frame.Active = true
 
-	-- Draggable
-	local dragging = false
-	local dragInput
-	local dragStart
-	local startPos
+    -- Làm tròn góc
+    local corner = Instance.new("UICorner")
+    corner.Parent = frame
+    corner.CornerRadius = UDim.new(0, 8)
 
-	local function update(input)
-		local delta = input.Position - dragStart
-		toggleButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-	end
+    -- Label
+    local label = Instance.new("TextLabel")
+    label.Parent = frame
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = "AIM: OFF"
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextSize = 16
+    label.Font = Enum.Font.SourceSansBold
+    label.TextScaled = true
 
-	toggleButton.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = toggleButton.Position
-		end
-	end)
+    toggleButton = label
 
-	toggleButton.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
-		end
-	end)
+    -- === KÉO THẢ ===
+    local dragging = false
+    local dragStartPos = nil
+    local startFramePos = nil
+    local dragInput = nil
 
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			update(input)
-		end
-	end)
+    local function updateDrag(input)
+        if not dragging or not dragStartPos or not startFramePos then return end
+        local delta = input.Position - dragStartPos
+        local newPos = UDim2.new(
+            startFramePos.X.Scale + delta.X / screenGui.AbsoluteSize.X,
+            0,
+            startFramePos.Y.Scale + delta.Y / screenGui.AbsoluteSize.Y,
+            0
+        )
+        -- Giới hạn trong màn hình
+        newPos = UDim2.new(
+            math.clamp(newPos.X.Scale, 0, 1 - frame.Size.X.Scale),
+            0,
+            math.clamp(newPos.Y.Scale, 0, 1 - frame.Size.Y.Scale),
+            0
+        )
+        frame.Position = newPos
+    end
 
-	toggleButton.MouseButton1Click:Connect(function()
-		isAiming = not isAiming
-		toggleButton.Text = isAiming and "AIM: ON" or "AIM: OFF"
-		toggleButton.BackgroundColor3 = isAiming and Color3.fromRGB(0, 100, 0) or Color3.fromRGB(0, 0, 0)
-		if not isAiming then
-			currentTarget = nil
-		end
-	end)
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStartPos = input.Position
+            startFramePos = frame.Position
+            dragInput = input
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    dragStartPos = nil
+                    startFramePos = nil
+                    dragInput = nil
+                end
+            end)
+        end
+    end)
+
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.Mouse then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            updateDrag(input)
+        end
+    end)
+
+    -- === SỰ KIỆN CLICK / TAP ===
+    local function onActivate()
+        toggleAim()
+    end
+
+    frame.MouseButton1Click:Connect(onActivate)
+    frame.TouchTap:Connect(onActivate)
+
+    return screenGui
 end
 
--- Get closest target in circle
-local function getClosestTarget()
-	local mousePos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-	local closest = nil
-	local minDist = AIM_RADIUS + 1
+-- ================== KHỞI TẠO ==================
+local function init()
+    createCircle()
+    createToggleButton()
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer and player.Character then
-			local character = player.Character
-			local head = character:FindFirstChild("Head")
-			if head then
-				local headPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-				if onScreen then
-					local screenPos = Vector2.new(headPos.X, headPos.Y)
-					local dist = (screenPos - mousePos).Magnitude
-					if dist < minDist then
-						-- LOS Check
-						local rayOrigin = Camera.CFrame.Position
-						local rayDirection = (head.Position - rayOrigin).Unit * MAX_DISTANCE
-						local raycastParams = RaycastParams.new()
-						raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
-						raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-						raycastParams.IgnoreWater = true
+    -- Cập nhật vị trí vòng tròn khi thay đổi kích thước màn hình
+    Camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateCirclePosition)
 
-						local result = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-						if result and result.Instance:IsDescendantOf(character) then
-							minDist = dist
-							closest = head
-						end
-					end
-				end
-			end
-		end
-	end
-	return closest
+    -- Luôn ẩn khi chưa bật
+    if circleObject then circleObject.Visible = false end
 end
 
--- Auto unlock if target out of circle
-local function shouldUnlockTarget(targetHead)
-	if not targetHead then return true end
-	local headPos = Camera:WorldToViewportPoint(targetHead.Position)
-	if not headPos.Z > 0 then return true end
-	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-	local dist = (Vector2.new(headPos.X, headPos.Y) - center).Magnitude
-	return dist > AIM_RADIUS
-end
+-- Chạy
+init()
 
--- Main loop
-local connection
-local function startAimSystem()
-	if connection then connection:Disconnect() end
-
-	createCircle()
-	createToggleButton()
-
-	connection = RunService.RenderStepped:Connect(function(dt)
-		if not isAiming then
-			if circle then circle.Visible = false end
-			currentTarget = nil
-			return
-		end
-
-		if circle then
-			circle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-			circle.Visible = true
-		end
-
-		-- Update target
-		if not currentTarget or shouldUnlockTarget(currentTarget) then
-			currentTarget = getClosestTarget()
-		end
-
-		if currentTarget and currentTarget.Parent then
-			local targetPos = currentTarget.Position
-
-			-- Smooth lock using relative CFrame (mobile first-person friendly)
-			local currentCFrame = Camera.CFrame
-			local lookAtCFrame = CFrame.lookAt(currentCFrame.Position, targetPos)
-
-			-- Interpolate smoothly
-			Camera.CFrame = currentCFrame:Lerp(lookAtCFrame, SMOOTHNESS)
-		else
-			currentTarget = nil
-		end
-	end)
-end
-
--- Cleanup
-local function stopAimSystem()
-	if connection then
-		connection:Disconnect()
-		connection = nil
-	end
-	if circle then
-		circle:Remove()
-		circle = nil
-	end
-	if toggleButton and toggleButton.Parent then
-		toggleButton.Parent:Destroy()
-	end
-end
-
--- Initialize
-startAimSystem()
-
--- Toggle with keyboard fallback (for testing)
-UserInputService.InputBegan:Connect(function(input, gp)
-	if gp then return end
-	if input.KeyCode == TOGGLE_KEY then
-		isAiming = not isAiming
-		if toggleButton then
-			toggleButton.Text = isAiming and "AIM: ON" or "AIM: OFF"
-			toggleButton.BackgroundColor3 = isAiming and Color3.fromRGB(0, 100, 0) or Color3.fromRGB(0, 0, 0)
-		end
-		if not isAiming then currentTarget = nil end
-	end
-end)
-
--- Auto restart if character respawns
-LocalPlayer.CharacterAdded:Connect(function()
-	task.wait(1)
-	if isAiming then
-		startAimSystem()
-	end
-end)-- Nyx Camera Lock-On System for Roblox Mobile (Delta Executor)
--- Professional, Optimized, First-Person Fixed
-
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
-local GuiService = game:GetService("GuiService")
-
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
-
-local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-
--- Config
-local AIM_RADIUS = 35 -- pixels
-local SMOOTHNESS = 0.15 -- lower = faster lock
-local MAX_DISTANCE = 500
-local TOGGLE_KEY = Enum.KeyCode.F -- fallback if needed
-
-local isAiming = false
-local currentTarget = nil
-local circle = nil
-local toggleButton = nil
-
--- Create Drawing Circle
-local function createCircle()
-	if circle then circle:Remove() end
-	circle = Drawing.new("Circle")
-	circle.Color = Color3.fromRGB(0, 255, 0)
-	circle.Thickness = 2
-	circle.NumSides = 64
-	circle.Radius = AIM_RADIUS
-	circle.Filled = false
-	circle.Transparency = 0.7
-	circle.Visible = false
-end
-
--- Create Draggable Toggle Button
-local function createToggleButton()
-	local screenGui = Instance.new("ScreenGui")
-	screenGui.ResetOnSpawn = false
-	screenGui.Parent = playerGui
-
-	toggleButton = Instance.new("TextButton")
-	toggleButton.Size = UDim2.new(0, 80, 0, 40)
-	toggleButton.Position = UDim2.new(0.5, -40, 0.1, 0)
-	toggleButton.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	toggleButton.BackgroundTransparency = 0.3
-	toggleButton.Text = "AIM: OFF"
-	toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	toggleButton.TextScaled = true
-	toggleButton.Font = Enum.Font.GothamBold
-	toggleButton.BorderSizePixel = 0
-	toggleButton.Parent = screenGui
-
-	-- Draggable
-	local dragging = false
-	local dragInput
-	local dragStart
-	local startPos
-
-	local function update(input)
-		local delta = input.Position - dragStart
-		toggleButton.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-	end
-
-	toggleButton.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = toggleButton.Position
-		end
-	end)
-
-	toggleButton.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			update(input)
-		end
-	end)
-
-	toggleButton.MouseButton1Click:Connect(function()
-		isAiming = not isAiming
-		toggleButton.Text = isAiming and "AIM: ON" or "AIM: OFF"
-		toggleButton.BackgroundColor3 = isAiming and Color3.fromRGB(0, 100, 0) or Color3.fromRGB(0, 0, 0)
-		if not isAiming then
-			currentTarget = nil
-		end
-	end)
-end
-
--- Get closest target in circle
-local function getClosestTarget()
-	local mousePos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-	local closest = nil
-	local minDist = AIM_RADIUS + 1
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer and player.Character then
-			local character = player.Character
-			local head = character:FindFirstChild("Head")
-			if head then
-				local headPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-				if onScreen then
-					local screenPos = Vector2.new(headPos.X, headPos.Y)
-					local dist = (screenPos - mousePos).Magnitude
-					if dist < minDist then
-						-- LOS Check
-						local rayOrigin = Camera.CFrame.Position
-						local rayDirection = (head.Position - rayOrigin).Unit * MAX_DISTANCE
-						local raycastParams = RaycastParams.new()
-						raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
-						raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-						raycastParams.IgnoreWater = true
-
-						local result = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-						if result and result.Instance:IsDescendantOf(character) then
-							minDist = dist
-							closest = head
-						end
-					end
-				end
-			end
-		end
-	end
-	return closest
-end
-
--- Auto unlock if target out of circle
-local function shouldUnlockTarget(targetHead)
-	if not targetHead then return true end
-	local headPos = Camera:WorldToViewportPoint(targetHead.Position)
-	if not headPos.Z > 0 then return true end
-	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-	local dist = (Vector2.new(headPos.X, headPos.Y) - center).Magnitude
-	return dist > AIM_RADIUS
-end
-
--- Main loop
-local connection
-local function startAimSystem()
-	if connection then connection:Disconnect() end
-
-	createCircle()
-	createToggleButton()
-
-	connection = RunService.RenderStepped:Connect(function(dt)
-		if not isAiming then
-			if circle then circle.Visible = false end
-			currentTarget = nil
-			return
-		end
-
-		if circle then
-			circle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-			circle.Visible = true
-		end
-
-		-- Update target
-		if not currentTarget or shouldUnlockTarget(currentTarget) then
-			currentTarget = getClosestTarget()
-		end
-
-		if currentTarget and currentTarget.Parent then
-			local targetPos = currentTarget.Position
-
-			-- Smooth lock using relative CFrame (mobile first-person friendly)
-			local currentCFrame = Camera.CFrame
-			local lookAtCFrame = CFrame.lookAt(currentCFrame.Position, targetPos)
-
-			-- Interpolate smoothly
-			Camera.CFrame = currentCFrame:Lerp(lookAtCFrame, SMOOTHNESS)
-		else
-			currentTarget = nil
-		end
-	end)
-end
-
--- Cleanup
-local function stopAimSystem()
-	if connection then
-		connection:Disconnect()
-		connection = nil
-	end
-	if circle then
-		circle:Remove()
-		circle = nil
-	end
-	if toggleButton and toggleButton.Parent then
-		toggleButton.Parent:Destroy()
-	end
-end
-
--- Initialize
-startAimSystem()
-
--- Toggle with keyboard fallback (for testing)
-UserInputService.InputBegan:Connect(function(input, gp)
-	if gp then return end
-	if input.KeyCode == TOGGLE_KEY then
-		isAiming = not isAiming
-		if toggleButton then
-			toggleButton.Text = isAiming and "AIM: ON" or "AIM: OFF"
-			toggleButton.BackgroundColor3 = isAiming and Color3.fromRGB(0, 100, 0) or Color3.fromRGB(0, 0, 0)
-		end
-		if not isAiming then currentTarget = nil end
-	end
-end)
-
--- Auto restart if character respawns
-LocalPlayer.CharacterAdded:Connect(function()
-	task.wait(1)
-	if isAiming then
-		startAimSystem()
-	end
+-- Xử lý khi nhân vật bị respawn (giữ nguyên trạng thái)
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    -- Nếu đang bật, tìm target lại
+    if isAimEnabled then
+        unlockTarget()
+        scanForTarget()
+    end
 end)
