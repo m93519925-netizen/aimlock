@@ -44,8 +44,8 @@ log("=== BẮT ĐẦU CHẠY AI EXECUTOR ===")
 -- ===== CẤU HÌNH =====
 local AI_API_KEY = "sk-Bvd9rSR06Rtroz8NCvTKJA"  -- THAY THẬT VÀO ĐÂY
 local AI_ENDPOINT = "https://llm.thesparkdaily.com/v1/chat/completions"
-local AI_MODEL = "gpt-4-turbo"
-local MAX_TOKENS = 4000
+local AI_MODEL = "deepseek-v4-flash"
+local MAX_TOKENS = 9999999999999999999999
 
 -- ===== KIỂM TRA MÔI TRƯỜNG =====
 log("Đang kiểm tra executor...")
