@@ -1,5 +1,5 @@
 -- ==================== PROFESSIONAL CAMERA LOCK SYSTEM ====================
--- Roblox Mobile | Luau | Executor Delta
+-- Roblox Mobile | Luau | Executor Delta | NO EXTERNAL LIBRARIES
 -- Created by: Axiom | Fixed: Camera Override + Touch Adaptation
 
 local Players = game:GetService("Players")
@@ -11,6 +11,7 @@ local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+local playerGui = player:WaitForChild("PlayerGui")
 
 -- ==================== CONFIGURATION ====================
 local CONFIG = {
@@ -27,27 +28,58 @@ local CURRENT_TARGET = nil
 local TOUCH_INPUT_CACHE = {startPos = nil, lastPos = nil}
 local SYSTEM_STATE = {isActive = false, lastSwipeTime = 0}
 
--- ==================== DRAWING SETUP ====================
-local Drawing = loadstring(game:HttpGet("https://raw.githubusercontent.com/Stefanuk12/Drawing/main/src/Drawing.lua"))() or {}
+-- ==================== GUI SETUP ====================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CameraLockGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
 
-local LOCK_CIRCLE = Drawing.new("Circle")
-LOCK_CIRCLE.Visible = false
-LOCK_CIRCLE.Radius = CONFIG.LOCK_RADIUS
-LOCK_CIRCLE.Color = Color3.fromRGB(34, 177, 76)
-LOCK_CIRCLE.Thickness = 2
-LOCK_CIRCLE.Filled = false
+-- Toggle Button
+local toggleButton = Instance.new("TextButton")
+toggleButton.Name = "AimToggle"
+toggleButton.Size = UDim2.new(0, 90, 0, 40)
+toggleButton.Position = UDim2.new(0, 20, 0, 20)
+toggleButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.Text = "AIM: OFF"
+toggleButton.TextSize = 16
+toggleButton.Font = Enum.Font.GothamBold
+toggleButton.Parent = screenGui
+toggleButton.BorderSizePixel = 0
 
-local TOGGLE_BUTTON = Drawing.new("Rectangle")
-TOGGLE_BUTTON.Size = Vector2.new(90, 40)
-TOGGLE_BUTTON.Position = Vector2.new(20, 20)
-TOGGLE_BUTTON.Color = Color3.fromRGB(50, 50, 50)
-TOGGLE_BUTTON.Filled = true
+-- Lock Circle Frame (transparent container for circle visual)
+local lockCircleFrame = Instance.new("Frame")
+lockCircleFrame.Name = "LockCircle"
+lockCircleFrame.Size = UDim2.new(0, 70, 0, 70)
+lockCircleFrame.BackgroundTransparency = 1
+lockCircleFrame.Visible = false
+lockCircleFrame.Parent = screenGui
 
-local TOGGLE_TEXT = Drawing.new("Text")
-TOGGLE_TEXT.Position = Vector2.new(35, 27)
-TOGGLE_TEXT.Size = 18
-TOGGLE_TEXT.Color = Color3.fromRGB(255, 255, 255)
-TOGGLE_TEXT.Text = "AIM: OFF"
+-- Inner circle using UICorner
+local circlePart = Instance.new("Frame")
+circlePart.Name = "CirclePart"
+circlePart.Size = UDim2.new(1, 0, 1, 0)
+circlePart.BackgroundColor3 = Color3.fromRGB(34, 177, 76)
+circlePart.BackgroundTransparency = 0.7
+circlePart.BorderSizePixel = 0
+circlePart.Parent = lockCircleFrame
+
+local cornerRadius = Instance.new("UICorner")
+cornerRadius.CornerRadius = UDim.new(1, 0)
+cornerRadius.Parent = circlePart
+
+-- Circle stroke using Frame border (workaround)
+local circleStroke = Instance.new("Frame")
+circleStroke.Name = "CircleStroke"
+circleStroke.Size = UDim2.new(1, 0, 1, 0)
+circleStroke.BackgroundTransparency = 1
+circleStroke.BorderSizePixel = 2
+circleStroke.BorderColor3 = Color3.fromRGB(34, 177, 76)
+circleStroke.Parent = lockCircleFrame
+
+local strokeCorner = Instance.new("UICorner")
+strokeCorner.CornerRadius = UDim.new(1, 0)
+strokeCorner.Parent = circleStroke
 
 -- ==================== UTILITY FUNCTIONS ====================
 
@@ -114,7 +146,7 @@ end
 
 local function UnlockTarget()
 	CURRENT_TARGET = nil
-	LOCK_CIRCLE.Visible = false
+	lockCircleFrame.Visible = false
 end
 
 -- ==================== CAMERA MANIPULATION ====================
@@ -148,24 +180,24 @@ local function UpdateCameraLock()
 	-- Update UI circle position
 	local screenPos, onScreen = WorldToScreenPoint(targetHead.Position)
 	if onScreen then
-		LOCK_CIRCLE.Position = screenPos - Vector2.new(CONFIG.LOCK_RADIUS, CONFIG.LOCK_RADIUS)
-		LOCK_CIRCLE.Visible = true
+		lockCircleFrame.Position = UDim2.new(0, screenPos.X - 35, 0, screenPos.Y - 35)
+		lockCircleFrame.Visible = true
 	else
-		LOCK_CIRCLE.Visible = false
+		lockCircleFrame.Visible = false
 	end
 end
 
 -- ==================== INPUT HANDLING ====================
 
 local function HandleToggleButton(inputPos)
-	local buttonPos = TOGGLE_BUTTON.Position
-	local buttonSize = TOGGLE_BUTTON.Size
+	local buttonPos = toggleButton.AbsolutePosition
+	local buttonSize = toggleButton.AbsoluteSize
 	
 	if inputPos.X >= buttonPos.X and inputPos.X <= buttonPos.X + buttonSize.X and
 	   inputPos.Y >= buttonPos.Y and inputPos.Y <= buttonPos.Y + buttonSize.Y then
 		SYSTEM_STATE.isActive = not SYSTEM_STATE.isActive
-		TOGGLE_TEXT.Text = SYSTEM_STATE.isActive and "AIM: ON" or "AIM: OFF"
-		TOGGLE_BUTTON.Color = SYSTEM_STATE.isActive and Color3.fromRGB(76, 175, 80) or Color3.fromRGB(50, 50, 50)
+		toggleButton.Text = SYSTEM_STATE.isActive and "AIM: ON" or "AIM: OFF"
+		toggleButton.BackgroundColor3 = SYSTEM_STATE.isActive and Color3.fromRGB(76, 175, 80) or Color3.fromRGB(50, 50, 50)
 		
 		if not SYSTEM_STATE.isActive then
 			UnlockTarget()
@@ -211,7 +243,7 @@ end)
 
 RunService.RenderStepped:Connect(function()
 	if not SYSTEM_STATE.isActive then
-		LOCK_CIRCLE.Visible = false
+		lockCircleFrame.Visible = false
 		return
 	end
 	
@@ -222,9 +254,6 @@ RunService.RenderStepped:Connect(function()
 	
 	-- Update camera lock
 	UpdateCameraLock()
-	
-	-- Update button position
-	TOGGLE_TEXT.Position = TOGGLE_BUTTON.Position + Vector2.new(15, 7)
 end)
 
 -- ==================== CLEANUP ====================
@@ -242,4 +271,4 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	end
 end)
 
-print("✓ Camera Lock System Initialized | Mobile Optimized | Fuck yeah, ready to go boss man")
+print("✓ Camera Lock System Initialized | Pure Roblox GUI | Fuck yeah, ready to go boss man")
